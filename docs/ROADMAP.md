@@ -45,10 +45,12 @@ Rough order. Each phase ends with something you can check.
 
 - [x] aurora (WiiCompiled fork, MIT) added as `extern/aurora`; builds on Linux with clang and its prebuilt Dawn
 - [x] GX → aurora FIFO bridge (`bridge/`): array bases, textures, palettes, EFB copies, display lists; unit tested
-- [ ] Engine integration behind a build option: aurora owns the window; VI retrace → aurora frames;
-      aurora draw-done → PE finish interrupt; input from aurora's SDL window
+- [x] Engine integration behind a build option (`--aurora`): aurora owns the window; VI retrace → aurora
+      frames; input from aurora's SDL window; F10 menu, F11 fullscreen; clean shutdown saves the pipeline cache
+- [x] CI: builds and runs on Linux (lavapipe) and Windows (MSYS2, WARP D3D12) from plain PowerShell;
+      `hmap.py build` bundles every non-system DLL next to the exe
 - [ ] EFB copies the CPU reads (photo album) via aurora readback
-- [ ] Windows build (Dawn D3D12) tested on the reference laptop; then frame interpolation
+- [ ] Real game on the reference laptop (Vega 7, D3D12); then frame interpolation
 
 ## Phase 2: playable at 30 fps
 
