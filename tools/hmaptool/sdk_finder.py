@@ -38,6 +38,7 @@ class Match:
 class Result:
     name: str
     matches: list[Match] = field(default_factory=list)
+    alternatives: list[Match] = field(default_factory=list)  # losers of a tie-break, for the report
 
     @property
     def address(self) -> int | None:
@@ -138,27 +139,49 @@ def find_os_load_context(code: Code) -> Result:
     return Result("OSLoadContext", _unique(out))
 
 
+JMPBUF_GPR_OFFSETS = range(0x0C, 0x24, 4)  # MSL builds put r13 at 0x10 or 0x14 (after a reserved word)
+
+
+def _touches_gqr_or_rfi(body: list[int]) -> bool:
+    return ppc.RFI in body or any((ppc.is_mfspr(w) or ppc.is_mtspr(w)) and ppc.is_gqr(ppc.spr(w)) for w in body)
+
+
 def find_setjmp(code: Code) -> Result:
+    """MSL __setjmp: saves LR/CR/r1/r2, stmw r13 into the buffer in r3, returns 0."""
     out = []
     for address, word in code.instructions():
-        if not ppc.is_stmw(word, 13, 3, 0x10):
+        if not (ppc.is_stmw(word, 13, 3) and ppc.simm(word) in JMPBUF_GPR_OFFSETS):
             continue
         start = code.function_start(address)
         body = code.body(start)
-        if any(ppc.is_mfcr(w) for w in body) and ppc.enc_li(3, 0) in body and not any(ppc.is_lmw(w) for w in body):
-            out.append(Match("setjmp", start, f"stmw r13,0x10(r3) at {address:#010x} with mfcr and li r3,0"))
+        if (
+            any(ppc.is_mfcr(w) for w in body)
+            and any(ppc.is_mfspr(w, ppc.SPR_LR) for w in body)
+            and ppc.enc_li(3, 0) in body
+            and not any(ppc.is_lmw(w) for w in body)
+            and not _touches_gqr_or_rfi(body)
+            and len(body) <= 64
+        ):
+            out.append(Match("setjmp", start, f"stmw r13,{ppc.simm(word):#x}(r3) at {address:#010x} with mflr/mfcr and li r3,0"))
     return Result("setjmp", _unique(out))
 
 
 def find_longjmp(code: Code) -> Result:
+    """MSL longjmp: restores CR (mtcrf), LR, r1, r2 and lmw r13 from the buffer in r3."""
     out = []
     for address, word in code.instructions():
-        if not ppc.is_lmw(word, 13, 3, 0x10):
+        if not (ppc.is_lmw(word, 13, 3) and ppc.simm(word) in JMPBUF_GPR_OFFSETS):
             continue
         start = code.function_start(address)
         body = code.body(start)
-        if any(ppc.is_mtcrf(w) for w in body) and not any(ppc.is_stmw(w) for w in body):
-            out.append(Match("longjmp", start, f"lmw r13,0x10(r3) at {address:#010x} with mtcrf"))
+        if (
+            any(ppc.is_mtcrf(w) for w in body)
+            and any(ppc.is_mtspr(w, ppc.SPR_LR) for w in body)
+            and not any(ppc.is_stmw(w) for w in body)
+            and not _touches_gqr_or_rfi(body)
+            and len(body) <= 64
+        ):
+            out.append(Match("longjmp", start, f"lmw r13,{ppc.simm(word):#x}(r3) at {address:#010x} with mtcrf/mtlr"))
     return Result("longjmp", _unique(out))
 
 
@@ -240,9 +263,27 @@ def find_os_panic(code: Code) -> Result:
     both = {m.address for m in per_needle[0]} & {m.address for m in per_needle[1]}
     if len(both) == 1:
         return Result("OSPanic", [m for m in per_needle[0] if m.address in both])
-    if per_needle[0]:
-        return Result("OSPanic", per_needle[0])
-    return Result("OSPanic", per_needle[1])
+    matches = per_needle[0] or per_needle[1]
+    if len(matches) > 1:
+        # Tie-break: OSPanic is called from many SDK sites; a look-alike much less.
+        counts = call_counts(code, {m.address for m in matches})
+        for m in matches:
+            m.evidence += f", {counts[m.address]} callers"
+        ranked = sorted(matches, key=lambda m: -counts[m.address])
+        if counts[ranked[0].address] >= 2 * max(1, counts[ranked[1].address]):
+            ranked[0].evidence += " (most callers)"
+            return Result("OSPanic", [ranked[0]], alternatives=ranked[1:])
+    return Result("OSPanic", matches)
+
+
+def call_counts(code: Code, targets: set[int]) -> dict[int, int]:
+    counts = {t: 0 for t in targets}
+    for address, word in code.instructions():
+        if ppc.opcode(word) == 18 and word & 1:
+            target = ppc.branch_target(word, address)
+            if target in counts:
+                counts[target] += 1
+    return counts
 
 
 FINDERS = {
@@ -256,6 +297,11 @@ FINDERS = {
 }
 
 REQUIRED = tuple(FINDERS)
+
+# The MSL setjmp/longjmp pair is only linked when the game uses it. When neither is
+# found the game is assumed not to use them and they are dropped from the replacement
+# list (the engine only needs them to run code that does).
+OPTIONAL_PAIR = ("setjmp", "longjmp")
 
 
 def find_all(dol: Dol, function_starts: list[int] | None = None, names=REQUIRED) -> dict[str, Result]:

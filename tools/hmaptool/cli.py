@@ -269,13 +269,29 @@ def cmd_find_dsp(args) -> int:
     return 0
 
 
+def cmd_dump(args) -> int:
+    """Print raw instruction words, for sharing when a function needs identifying by hand."""
+    dol = Dol.load(_original_dol())
+    start = int(args.address, 16)
+    for address in range(start, start + 4 * args.count, 4):
+        word = dol.word(address)
+        if word is None:
+            break
+        print(f"{address:08x}: {word:08x}")
+    return 0
+
+
 def _analysis_ready() -> None:
     sdk = analyze.read_sdk(project.REPO_GAME / "game.toml")
-    if not sdk.get("os_save_context") or not sdk.get("setjmp"):
+    if not sdk.get("os_save_context"):
         raise SystemExit("game.toml [sdk] addresses are not filled in - run `hmap.py analyze` until it reports nothing missing")
-    for name in ("dol_functions.csv", "symbols.csv", "hle_functions.csv"):
+    for name in ("dol_functions.csv", "symbols.csv"):
         if not (project.analysis() / name).exists():
             raise SystemExit(f"analysis/{name} is missing - run `hmap.py analyze`")
+    if not (project.WORK / "hle_functions.csv").exists():
+        raise SystemExit("run `hmap.py analyze` again (it now writes build/hmap/hle_functions.csv)")
+    if not sdk.get("setjmp") and any(project.modules_dir().glob("*.rel")):
+        raise SystemExit("this disc has REL modules, which need the setjmp address in game.toml")
 
 
 def cmd_recompile(args) -> int:
@@ -287,11 +303,12 @@ def cmd_recompile(args) -> int:
     recompiler = project.ENGINE / "recompiler"
     env = _engine_env()
     modules = unpack_modules()
-    _run([_python(), recompiler / "recomp.py"], cwd=project.ENGINE, env=env)
+    replacements = ["--replacements", project.WORK / "hle_functions.csv"]
+    _run([_python(), recompiler / "recomp.py", *replacements], cwd=project.ENGINE, env=env)
     if modules:
         _run([_python(), recompiler / "recomp_rel.py", "--all"], cwd=project.ENGINE, env=env)
         # Second DOL pass: entries discovered from module calls into the DOL.
-        _run([_python(), recompiler / "recomp.py"], cwd=project.ENGINE, env=env)
+        _run([_python(), recompiler / "recomp.py", *replacements], cwd=project.ENGINE, env=env)
     dsp_rows = symbols.read_csv_list(project.analysis() / "dsp_ucode.csv")
     dsp_out = project.generated() / "dsp"
     if dsp_rows:
@@ -381,6 +398,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--list", action="store_true")
     p.add_argument("--reset", action="store_true", help="restore the original main.dol")
     p.set_defaults(func=cmd_patch)
+
+    p = sub.add_parser("dump", help="print instruction words at an address (for debugging analysis)")
+    p.add_argument("address")
+    p.add_argument("--count", type=int, default=48)
+    p.set_defaults(func=cmd_dump)
 
     sub.add_parser("fps-scan", help="find the 30 fps frame lock").set_defaults(func=cmd_fps_scan)
 

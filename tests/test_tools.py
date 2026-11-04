@@ -306,3 +306,57 @@ class DspTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RealWorldVariantTests(unittest.TestCase):
+    """Cases seen on the real RBIEE9 disc: setjmp buffer layout, no setjmp, two panic look-alikes."""
+
+    def _dol(self, functions, data=b""):
+        code, labels = [], {}
+        for name, words in functions:
+            labels[name] = synthetic.TEXT + 4 * len(code)
+            code += words + [0, 0]
+        text = b"".join(struct.pack(">I", w) for w in code)
+        sections = [(synthetic.TEXT, text, True)]
+        if data:
+            sections.append((synthetic.DATA, data, False))
+        return Dol(synthetic.dolmod.build(sections, entry=synthetic.TEXT)), labels
+
+    def test_setjmp_with_reserved_word(self):
+        p = ppc
+        setjmp = [p.enc_mflr(5), p.enc_mfcr(6), p.enc_stw(5, 0, 3), p.enc_stw(6, 4, 3), p.enc_stw(1, 8, 3),
+                  p.enc_stw(2, 12, 3), p.enc_stmw(13, 0x14, 3), p.enc_li(3, 0), p.BLR]
+        longjmp = [p.enc_lwz(5, 0, 3), p.enc_lwz(6, 4, 3), p.enc_mtlr(5), p.enc_mtcrf(255, 6),
+                   p.enc_lmw(13, 0x14, 3), p.enc_mr(3, 4), p.BLR]
+        dol, labels = self._dol([("entry", [p.BLR]), ("save", synthetic.save_context()), ("setjmp", setjmp), ("longjmp", longjmp)])
+        results = sdk_finder.find_all(dol, sorted(labels.values()), ["setjmp", "longjmp", "OSSaveContext"])
+        self.assertEqual(results["setjmp"].address, labels["setjmp"])
+        self.assertEqual(results["longjmp"].address, labels["longjmp"])
+        self.assertEqual(results["OSSaveContext"].address, labels["save"])
+
+    def test_game_without_setjmp(self):
+        dol, labels = self._dol([("entry", [ppc.BLR]), ("save", synthetic.save_context()), ("load", synthetic.load_context()),
+                                 ("fiber", synthetic.switch_fiber()), ("real", synthetic.real_mode())])
+        manual = Path(tempfile.mkdtemp()) / "manual.csv"
+        manual.write_text("address,name\n0x%08x,OSPanic\n" % labels["entry"])
+        hle = ["OSRealModeCall", "OSPanic", "OSLoadContext", "OSSwitchFiber", "longjmp"]
+        result = analyze.analyse(dol, [], None, manual, hle)
+        self.assertEqual(result.missing, [])
+        self.assertEqual(result.absent, ["setjmp", "longjmp"])
+        self.assertNotIn("longjmp", result.replacements)
+        self.assertNotIn("setjmp", result.sdk)
+
+    def test_ospanic_tie_break_by_callers(self):
+        data = bytearray(64) + synthetic.PANIC_STRING
+        string = synthetic.DATA + 64
+        dol0, labels0 = self._dol([("entry", [ppc.BLR]), ("panic", synthetic.panic(string)), ("lookalike", synthetic.panic(string))], bytes(data))
+        functions = [("entry", [ppc.BLR]), ("panic", synthetic.panic(string)), ("lookalike", synthetic.panic(string))]
+        # three callers of `panic`, one of `lookalike`; addresses are known from the layout above
+        cursor = synthetic.TEXT + 4 * sum(len(w) + 2 for _, w in functions)
+        for i, target in enumerate(["panic", "panic", "panic", "lookalike"]):
+            functions.append((f"c{i}", [ppc.enc_bl(cursor, labels0[target]), ppc.BLR]))
+            cursor += 4 * 4
+        dol, labels = self._dol(functions, bytes(data))
+        result = sdk_finder.find_os_panic(sdk_finder.Code(dol, sorted(labels.values())))
+        self.assertEqual(result.address, labels["panic"])
+        self.assertEqual([m.address for m in result.alternatives], [labels["lookalike"]])

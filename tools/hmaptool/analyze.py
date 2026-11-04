@@ -28,6 +28,8 @@ class AnalysisResult:
     table: symbols.SymbolTable
     sdk: dict[str, int] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
+    replacements: list[str] = field(default_factory=list)  # effective hle_functions for this disc
+    absent: list[str] = field(default_factory=list)        # optional functions the game does not contain
     report: list[str] = field(default_factory=list)
 
 
@@ -97,6 +99,7 @@ def analyse(dol: Dol, dtk_symbols: list[symbols.Symbol], dolphin_map: Path | Non
                 table.add_function(result.address)
                 table.add_name(result.address, name, "pattern", override=existing is None)
                 report.append(f"{name}: {result.address:#010x} ({result.matches[0].evidence})")
+                report.extend(f"    not chosen: {m.address:#010x}  {m.evidence}" for m in result.alternatives)
         elif existing is None:
             if result.matches:
                 report.append(f"{name}: AMBIGUOUS - {len(result.matches)} candidates:")
@@ -111,14 +114,22 @@ def analyse(dol: Dol, dtk_symbols: list[symbols.Symbol], dolphin_map: Path | Non
     if manual_symbols:
         report.append(f"manual_symbols.csv: {len(manual_symbols)} names")
 
+    # setjmp/longjmp are only linked into games that use them.
+    absent = []
+    pair = sdk_finder.OPTIONAL_PAIR
+    if all(table.address_of(n) is None and not found[n].matches for n in pair):
+        absent = list(pair)
+        report.append("setjmp/longjmp: not in this game (no candidates) - dropped from the replacement list")
+
     needed = list(dict.fromkeys(list(hle_names) + list(REQUIRED_NAMES)))
-    missing = [n for n in needed if table.address_of(n) is None]
+    missing = [n for n in needed if table.address_of(n) is None and n not in absent]
+    replacements = [n for n in hle_names if n not in absent]
     sdk = {}
     for key, name in (("os_save_context", "OSSaveContext"), ("setjmp", "setjmp")):
         address = table.address_of(name)
         if address is not None:
             sdk[key] = address
-    return AnalysisResult(table, sdk, missing, report)
+    return AnalysisResult(table=table, sdk=sdk, missing=missing, report=report, replacements=replacements, absent=absent)
 
 
 TOML_ID = re.compile(r'^id\s*=\s*".*"$', re.M)
@@ -144,5 +155,8 @@ def save(result: AnalysisResult, game_id: str) -> None:
     out = project.analysis()
     result.table.write_functions(out / "dol_functions.csv")
     result.table.write_names(out / "symbols.csv")
+    effective = project.WORK / "hle_functions.csv"
+    effective.parent.mkdir(parents=True, exist_ok=True)
+    effective.write_text("name\n" + "".join(f"{n}\n" for n in result.replacements), encoding="utf-8")
     (out / "sdk_report.txt").write_text("\n".join(result.report) + "\n", encoding="utf-8")
     write_game_toml(project.REPO_GAME / "game.toml", game_id, result.sdk)
