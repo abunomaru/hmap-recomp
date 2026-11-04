@@ -37,3 +37,4 @@ __pycache__/
 *.swp
 *.log
 /disc/
+/game-files/

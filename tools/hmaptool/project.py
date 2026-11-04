@@ -77,10 +77,18 @@ def apply_engine_patches(verbose: bool = False) -> list[str]:
             if verbose:
                 print(f"engine patch already applied: {patch.name}")
             continue
+        # Windows checkouts with core.autocrlf=true have CRLF files; retry ignoring whitespace.
+        extra = ()
         check = git_apply("--check")
         if check.returncode != 0:
-            raise SystemExit(f"engine patch {patch.name} does not apply:\n{check.stderr}")
-        git_apply()
+            extra = ("--ignore-whitespace",)
+            if git_apply("--reverse", "--check", *extra).returncode == 0:
+                continue
+            check = git_apply("--check", *extra)
+        if check.returncode != 0:
+            raise SystemExit(f"engine patch {patch.name} does not apply:\n{check.stderr}\n"
+                             "On Windows, clone with: git -c core.autocrlf=false clone --recursive ...")
+        git_apply(*extra)
         applied.append(patch.name)
         print(f"engine patch applied: {patch.name}")
     return applied
