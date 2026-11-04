@@ -182,7 +182,7 @@ void draw_menu() {
 
 void start() {
     AuroraConfig config{};
-    config.appName = game::description().title;
+    config.appName = game::description().title;  // window title
     config.logCallback = &log_callback;
     config.vsync = false;
     // Software GPUs (llvmpipe/lavapipe) are refused unless asked for: used by tests and CI.
@@ -191,6 +191,11 @@ void start() {
     static const std::string user_path = std::filesystem::absolute("games/hmap/aurora").string();
     std::filesystem::create_directories(user_path + "/texture_replacements");
     config.userPath = user_path.c_str();
+    static const std::string cache_path = user_path + "/cache";
+    std::filesystem::create_directories(cache_path);
+    // Must be set: left null, aurora asks SDL_GetPrefPath(appName) for a folder, which fails on
+    // Windows because the title contains ':', and aurora then crashes on the null path.
+    config.cachePath = cache_path.c_str();  // shader / pipeline caches
     config.allowTextureReplacements = true;
     static char program[] = "hmap";
     static char* argv[] = {program, nullptr};
