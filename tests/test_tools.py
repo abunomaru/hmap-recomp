@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import synthetic
+from hmaptool import windlls
 from hmaptool import analyze, compress, disc, dsp_finder, fps_scan, patches, ppc, sdk_finder, symbols
 from hmaptool.dol import Dol
 
@@ -304,9 +305,6 @@ class DspTests(unittest.TestCase):
         self.assertIn(found.dol_offset, [c.dol_offset for c in dsp_finder.scan(dol)])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class RealWorldVariantTests(unittest.TestCase):
     """Cases seen on the real RBIEE9 disc: setjmp buffer layout, no setjmp, two panic look-alikes."""
@@ -509,3 +507,39 @@ class SaveTests(unittest.TestCase):
         backup = saves.copy_save(dolphin, port)
         self.assertEqual((port / "save" / "s0000.sv").read_bytes(), b"farm from dolphin")
         self.assertEqual((backup / "save" / "s0000.sv").read_bytes(), b"old port save")
+
+
+class WinDllTests(unittest.TestCase):
+    """The DLL bundler, on a MinGW cross-compiled program when the cross compiler is installed."""
+
+    def test_bundle_copies_mingw_runtime(self):
+        import glob
+        import os
+        import shutil
+        import subprocess
+        compiler = shutil.which("x86_64-w64-mingw32-g++-posix") or shutil.which("x86_64-w64-mingw32-g++")
+        runtime = sorted(glob.glob("/usr/lib/gcc/x86_64-w64-mingw32/*-posix")) or sorted(glob.glob("/usr/lib/gcc/x86_64-w64-mingw32/*"))
+        if not compiler or not runtime:
+            self.skipTest("MinGW cross compiler not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp) / "game"
+            game.mkdir()
+            source = Path(tmp) / "t.cpp"
+            source.write_text("#include <thread>\n#include <cstdio>\nint main(){std::thread t([]{std::puts(\"x\");});t.join();}\n")
+            subprocess.run([compiler, str(source), "-o", str(game / "t.exe")], check=True)
+            self.assertIn("libstdc++-6.dll", windlls.imports(game / "t.exe"))
+            old_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = runtime[-1] + os.pathsep + "/usr/x86_64-w64-mingw32/lib"
+            try:
+                copied = windlls.bundle(game / "t.exe")
+            finally:
+                os.environ["PATH"] = old_path
+            self.assertIn("libstdc++-6.dll", copied)
+            self.assertIn("libgcc_s_seh-1.dll", copied)
+            self.assertTrue((game / "libstdc++-6.dll").is_file())
+            self.assertFalse(any(name.lower() in ("kernel32.dll", "msvcrt.dll") for name in copied))
+            self.assertEqual(windlls.bundle(game / "t.exe"), [], "second run copies nothing")
+
+
+if __name__ == "__main__":
+    unittest.main()

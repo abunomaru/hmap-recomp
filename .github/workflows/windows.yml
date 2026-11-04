@@ -50,13 +50,18 @@ jobs:
         shell: pwsh
         run: |
           cd extern/wiiparty-recomp
-          Get-ChildItem build/out-hmap-aurora/*.dll | Select-Object Name
+          # Plain PowerShell without the MSYS2 bin directory on PATH, as when a player double-clicks play.bat.
+          Get-ChildItem build/out-hmap-aurora/*.dll | ForEach-Object { Write-Host "bundled: $($_.Name)" }
           $env:WP_ALLOW_CPU_GPU = "1"
           $env:WP_LOG_FILE = "$PWD/aurora-run.log"
           $p = Start-Process -FilePath build/out-hmap-aurora/hmap.exe -ArgumentList "games/hmap/extracted" -PassThru -NoNewWindow
           $exited = $p.WaitForExit(20000)
           if (Test-Path aurora-run.log) { Get-Content aurora-run.log | Select-String "aurora|video|crash" | Select-Object -First 30 }
-          if ($exited) { Write-Error "hmap.exe exited early with code $($p.ExitCode)"; exit 1 }
+          if ($exited) {
+            $code = $p.ExitCode
+            if ($code -eq -1073741515) { Write-Error "hmap.exe could not find a DLL (0xC0000135)"; exit 1 }
+            Write-Error "hmap.exe exited early with code $code"; exit 1
+          }
           Stop-Process -Id $p.Id -Force
           if (-not (Select-String -Path aurora-run.log -Pattern "on aurora" -Quiet)) { Write-Error "aurora did not start"; exit 1 }
       - name: Upload build log on failure

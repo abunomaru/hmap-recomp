@@ -352,6 +352,11 @@ def cmd_build(args) -> int:
     if args.jobs:
         build += ["--parallel", str(args.jobs)]
     _run(build, cwd=project.ENGINE, env=env)
+    if sys.platform == "win32":
+        from . import windlls
+        copied = windlls.bundle(project.executable(args.aurora), project.cmake_dir(args.aurora))
+        if copied:
+            print(f"copied {len(copied)} DLL(s) next to the game: {', '.join(sorted(copied))}")
     print(f"built {project.executable(args.aurora)}")
     return 0
 
