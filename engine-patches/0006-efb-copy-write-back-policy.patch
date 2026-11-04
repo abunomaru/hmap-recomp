@@ -1,0 +1,100 @@
+diff --git a/engine/src/gpu/gx_render.cpp b/engine/src/gpu/gx_render.cpp
+index d2aeded..c3e909a 100644
+--- a/engine/src/gpu/gx_render.cpp
++++ b/engine/src/gpu/gx_render.cpp
+@@ -1639,7 +1639,8 @@ void copy_to_texture(uint32_t address, uint32_t stride, int x, int y, int width,
+     }
+     entry.view = entry.converted_view;
+     entry.bytes = entry.logical_width * entry.logical_height * copy_bits(format) / 8;
+-    if (queue_write_back(address, stride, x, y, width, height, entry.logical_width, entry.logical_height, format, intensity, alpha || depth, depth, filter)) {
++    if (want_write_back(address, g_frame) &&
++        queue_write_back(address, stride, x, y, width, height, entry.logical_width, entry.logical_height, format, intensity, alpha || depth, depth, filter)) {
+         entry.pending_writes++;
+     } else if (entry.pending_writes == 0) {
+         entry.guest_hash = guest_range_valid(address, entry.bytes) ? sample_hash(host(address), entry.bytes) : 0;
+diff --git a/engine/src/gpu/gx_render_common.cpp b/engine/src/gpu/gx_render_common.cpp
+index 87fbd92..e064b84 100644
+--- a/engine/src/gpu/gx_render_common.cpp
++++ b/engine/src/gpu/gx_render_common.cpp
+@@ -5,6 +5,9 @@
+ #include <cstring>
+ 
+ #include "wp/memory.h"
++#include "wp/settings.h"
++
++#include <unordered_map>
+ 
+ namespace wp::gx::render {
+ 
+@@ -521,4 +524,25 @@ SamplerParams sampler_params(uint32_t map, bool custom) {
+     return params;
+ }
+ 
++bool want_write_back(uint32_t address, uint64_t frame) {
++    static const settings::LiveNumber mode("video.efb_to_ram", "WP_EFB_TO_RAM");
++    int setting = mode();
++    if (setting == 0) {
++        return false;
++    }
++    if (setting == 1) {
++        return true;
++    }
++    struct History {
++        uint64_t frame = 0;
++        uint32_t streak = 0;
++    };
++    constexpr uint32_t kEffectStreak = 3;
++    static std::unordered_map<uint32_t, History> history;
++    History& entry = history[address];
++    entry.streak = (entry.streak > 0 && frame - entry.frame <= 1) ? entry.streak + 1 : 1;
++    entry.frame = frame;
++    return entry.streak < kEffectStreak;
++}
++
+ }
+diff --git a/engine/src/gpu/gx_render_common.h b/engine/src/gpu/gx_render_common.h
+index 4b6c87c..95b37fd 100644
+--- a/engine/src/gpu/gx_render_common.h
++++ b/engine/src/gpu/gx_render_common.h
+@@ -94,6 +94,15 @@ BlendState blend_state_for(uint32_t word);
+ void fill_constants(Constants& constants, int scale);
+ AlphaTestResult alpha_test_result(uint32_t test);
+ uint32_t copy_bits(uint32_t format);
++
++// Whether an EFB copy to `address` should also be written back to guest RAM
++// (hmap-recomp engine patch 0006). Setting video.efb_to_ram / WP_EFB_TO_RAM:
++//   1 = always (exact hardware behaviour; every GXDrawDone waits for the read-backs)
++//   0 = never  (like Dolphin's "Store EFB Copies to Texture Only")
++//   2 = auto (default): an address copied again within one presented frame for
++//       kEffectStreak copies in a row is a per-frame effect (blur, glow, depth of field)
++//       and stays on the GPU; one-off copies (photos, thumbnails) are written back.
++bool want_write_back(uint32_t address, uint64_t frame);
+ uint32_t copy_texture_format(uint32_t format);
+ inline uint32_t scale_bits(uint32_t value, int bits) {
+     return (value * ((1u << bits) - 1) + 127) / 255;
+diff --git a/engine/src/gpu/gx_render_gl.cpp b/engine/src/gpu/gx_render_gl.cpp
+index 625375f..72dd1fa 100644
+--- a/engine/src/gpu/gx_render_gl.cpp
++++ b/engine/src/gpu/gx_render_gl.cpp
+@@ -1669,7 +1669,8 @@ void copy_to_texture(uint32_t address, uint32_t stride, int x, int y, int width,
+     run_copy(entry.converted, target_width, target_height, x, y, width, height, format, intensity, alpha || depth, depth, filter);
+     entry.view = entry.converted.texture;
+     entry.bytes = entry.logical_width * entry.logical_height * copy_bits(format) / 8;
+-    if (queue_write_back(address, stride, x, y, width, height, entry.logical_width, entry.logical_height, format, intensity, alpha || depth, depth, filter)) {
++    if (want_write_back(address, g_frame) &&
++        queue_write_back(address, stride, x, y, width, height, entry.logical_width, entry.logical_height, format, intensity, alpha || depth, depth, filter)) {
+         entry.pending_writes++;
+     } else if (entry.pending_writes == 0) {
+         entry.guest_hash = guest_range_valid(address, entry.bytes) ? sample_hash(host(address), entry.bytes) : 0;
+diff --git a/engine/src/platform/settings.cpp b/engine/src/platform/settings.cpp
+index 0868574..9c1e025 100644
+--- a/engine/src/platform/settings.cpp
++++ b/engine/src/platform/settings.cpp
+@@ -25,6 +25,7 @@ const Option kBaseOptions[] = {
+     {"video.scale", "1"},
+     {"video.fullscreen", "0"},
+     {"video.copy_filter", "1"},
++    {"video.efb_to_ram", "2"},
+     {"video.dump_textures", "0"},
+     {"video.custom_textures", "1"},
+     {"input.gamepads", "1"},

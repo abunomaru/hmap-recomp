@@ -84,6 +84,16 @@ For a headless home server (build only, no window), see [docs/LOCAL_SERVER.md](d
 Set `input.nunchuk=0` in `games/hmap/settings.ini` (or `WP_NUNCHUK=0`) to unplug the Nunchuk.
 Keys can be rebound in the same file.
 
+## Settings worth knowing
+
+`games/hmap/settings.ini` (in the engine folder, created on first run) or **F10** in game:
+
+| Setting | Values | Notes |
+|---|---|---|
+| `video.scale` | 1–6 | internal resolution multiplier (1 = Wii's 640×480) |
+| `video.efb_to_ram` | 2 auto (default), 1 always, 0 never | how GPU-rendered copies reach game memory. `1` is exact but slow in this game (it renders ~20 copies per frame); `0` is fastest but may break photo-album thumbnails, as in Dolphin |
+| `input.nunchuk` | 1 / 0 | Nunchuk plugged in |
+
 ## 60 fps
 
 The game runs at 30 fps (25 on PAL). A recompiled build will run at the game's own rate,
