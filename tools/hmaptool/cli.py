@@ -363,6 +363,12 @@ def cmd_run(args) -> int:
         log_file.unlink(missing_ok=True)  # the engine appends (patch 0005); start each run fresh
         env["WP_LOG_FILE"] = str(log_file)
         print(f"engine log: {env['WP_LOG_FILE']} (CPU/GPU thread load once per second)")
+    for item in args.env or []:
+        key, _, value = item.partition("=")
+        if not key or not _:
+            raise SystemExit(f"--env expects KEY=VALUE, got {item!r}")
+        env[key] = value
+        print(f"engine switch: {key}={value}")
     if args.dump_dsp:
         Path(args.dump_dsp).mkdir(parents=True, exist_ok=True)
         env["WP_DUMP_DSP_CODE"] = str(Path(args.dump_dsp).resolve())
@@ -434,6 +440,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("run", help="run the built game")
     p.add_argument("--dump-dsp", metavar="DIR", help="write uploaded DSP microcode images to DIR")
     p.add_argument("--log", metavar="FILE", help="write the engine log (performance, threads, errors) to FILE")
+    p.add_argument("--env", action="append", metavar="KEY=VALUE",
+                   help="set an engine switch for this run, e.g. --env WP_NO_RENDER=1 (repeatable)")
     p.add_argument("--scale", type=int, choices=range(1, 7), metavar="1-6",
                    help="internal resolution multiplier, saved to settings.ini (2 = 1280x960, 3 = 1920x1440)")
     p.add_argument("args", nargs=argparse.REMAINDER)
