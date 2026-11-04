@@ -79,6 +79,15 @@ def cmd_doctor(args) -> int:
         check(tool, shutil.which(tool), "install it with your package manager")
     compiler = shutil.which("g++") or shutil.which("c++") or shutil.which("clang++")
     check(f"C++ compiler ({compiler or 'none'})", compiler, "GCC 13+ (MinGW-w64 on Windows) or Clang 17+")
+    clang = shutil.which("clang++")
+    print(f"  [{'ok' if clang else '--'}] clang++ for the aurora renderer (--aurora): {clang or 'not installed'}")
+    if sys.platform == "win32":
+        bin_dir = Path(compiler).parent if compiler else None
+        absl = bin_dir is not None and (bin_dir.parent / "include" / "absl").is_dir()
+        print(f"  [{'ok' if absl else '--'}] abseil for the aurora renderer"
+              + ("" if absl else "  -> pacman -S mingw-w64-ucrt-x86_64-abseil-cpp"))
+        if not clang:
+            print("        -> pacman -S mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-lld")
     if shutil.which("cmake"):
         version = subprocess.run(["cmake", "--version"], capture_output=True, text=True).stdout.split()[2]
         major, minor = (int(x) for x in version.split(".")[:2])
