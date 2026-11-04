@@ -13,4 +13,7 @@ c++ -std=c++17 -O1 -Wall -Wextra -I"$ENGINE/engine/include" "$ROOT/tests/engine/
 c++ -std=c++17 -O1 -Wall -Wextra -I"$ENGINE/engine/include" -I"$ENGINE/engine/src/gpu" "$ROOT/tests/engine/test_efb_policy.cpp" \
     -Wl,--start-group "$OUT/games/hmap/libhmap_code.a" "$OUT/engine/libwp_engine.a" -Wl,--end-group \
     "$OUT/third_party/libwp_dolphin_dsp.a" -lpthread -o "$BIN/test_efb_policy"
-cd "$ENGINE" && "$BIN/test_nunchuk" && "$BIN/test_efb_policy"
+c++ -std=c++17 -O1 -Wall -Wextra -I"$ENGINE/engine/include" "$ROOT/tests/engine/test_speed.cpp" \
+    -Wl,--start-group "$OUT/games/hmap/libhmap_code.a" "$OUT/engine/libwp_engine.a" -Wl,--end-group \
+    "$OUT/third_party/libwp_dolphin_dsp.a" -lpthread -o "$BIN/test_speed"
+cd "$ENGINE" && "$BIN/test_nunchuk" && "$BIN/test_efb_policy" && "$BIN/test_speed"

@@ -1,0 +1,159 @@
+diff --git a/engine/include/wp/keymap.h b/engine/include/wp/keymap.h
+index 83bd447..572932a 100644
+--- a/engine/include/wp/keymap.h
++++ b/engine/include/wp/keymap.h
+@@ -39,6 +39,7 @@ enum class Action {
+     StickDown,
+     StickLeft,
+     StickRight,
++    FastForward,
+     Count,
+ };
+ 
+diff --git a/engine/include/wp/runtime.h b/engine/include/wp/runtime.h
+index d0a1e1d..97bcb9d 100644
+--- a/engine/include/wp/runtime.h
++++ b/engine/include/wp/runtime.h
+@@ -31,6 +31,10 @@ void long_jump(Cpu& c);
+ void print_thread_stacks();
+ void print_guest_registers();
+ uint32_t symbol_address(const char* name);
++// Fast-forward (hmap-recomp engine patch 0008): the guest clock (time base, decrementer)
++// and the video retrace run `factor` times faster than real time; 1 = normal speed.
++void set_speed(uint32_t factor);
++uint32_t speed();
+ void interrupt_left();
+ 
+ }
+diff --git a/engine/src/core/interrupts.cpp b/engine/src/core/interrupts.cpp
+index 8603927..b5b7477 100644
+--- a/engine/src/core/interrupts.cpp
++++ b/engine/src/core/interrupts.cpp
+@@ -261,7 +261,7 @@ void poll_interrupts(Cpu& c) {
+     if (now < g_next_retrace) {
+         return;
+     }
+-    std::chrono::microseconds period = retrace_period();
++    std::chrono::microseconds period = retrace_period() / speed();  // fast-forward (patch 0008)
+     g_next_retrace += period;
+     if (g_next_retrace < now) {
+         g_next_retrace = now + period;
+diff --git a/engine/src/core/runtime.cpp b/engine/src/core/runtime.cpp
+index 50ac4ec..534971f 100644
+--- a/engine/src/core/runtime.cpp
++++ b/engine/src/core/runtime.cpp
+@@ -331,11 +331,53 @@ uint64_t wall_clock_ticks() {
+     return static_cast<uint64_t>(static_cast<int64_t>(now) - kSecondsFrom1970To2000 + offset) * kTimeBaseHz;
+ }
+ 
+-uint64_t time_base() {
++namespace {
++
++// Guest time = real time, except while fast-forwarding. Each speed change starts a new
++// immutable segment, so readers on any thread need one atomic load and never see a jump.
++struct SpeedSegment {
++    int64_t real_start;
++    uint64_t guest_start;
++    uint32_t factor;
++};
++
++std::atomic<const SpeedSegment*> g_speed_segment{nullptr};
++
++int64_t real_nanoseconds() {
+     using clock = std::chrono::steady_clock;
+     static const clock::time_point origin = clock::now();
++    return std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - origin).count();
++}
++
++uint64_t guest_nanoseconds(int64_t real) {
++    const SpeedSegment* segment = g_speed_segment.load(std::memory_order_acquire);
++    if (!segment) {
++        return static_cast<uint64_t>(real);
++    }
++    return segment->guest_start + static_cast<uint64_t>(real - segment->real_start) * segment->factor;
++}
++
++}
++
++void set_speed(uint32_t factor) {
++    factor = std::max(1u, std::min(factor, 16u));
++    if (speed() == factor) {
++        return;
++    }
++    int64_t now = real_nanoseconds();
++    // Segments are tiny and change only on a key press; the old ones are kept so a
++    // concurrent reader never touches freed memory.
++    g_speed_segment.store(new SpeedSegment{now, guest_nanoseconds(now), factor}, std::memory_order_release);
++}
++
++uint32_t speed() {
++    const SpeedSegment* segment = g_speed_segment.load(std::memory_order_acquire);
++    return segment ? segment->factor : 1;
++}
++
++uint64_t time_base() {
+     static const uint64_t start = wall_clock_ticks();
+-    uint64_t elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - origin).count());
++    uint64_t elapsed = guest_nanoseconds(real_nanoseconds());
+     return start + elapsed / 1000000000ull * kTimeBaseHz + elapsed % 1000000000ull * kTimeBaseHz / 1000000000ull;
+ }
+ 
+diff --git a/engine/src/input/input.cpp b/engine/src/input/input.cpp
+index a4f0ef4..82155e2 100644
+--- a/engine/src/input/input.cpp
++++ b/engine/src/input/input.cpp
+@@ -300,6 +300,9 @@ Sample device_sample(uint32_t channel) {
+         std::fputc(10, stderr);
+     }
+     if (window != nullptr && !focused) {
++        if (channel == 0) {
++            set_speed(1);  // never stay fast-forwarded while the window is in the background
++        }
+         return result;
+     }
+     if (channel != 0) {
+@@ -315,6 +318,11 @@ Sample device_sample(uint32_t channel) {
+         settings::reload_if_changed();
+     }
+     const keymap::Bindings& keys = bindings();
++    {
++        static const settings::LiveNumber fast_forward("system.fast_forward", "WP_FAST_FORWARD");
++        bool held = any_pressed(keys.of(keymap::Action::FastForward));
++        set_speed(held ? static_cast<uint32_t>(std::max(1, fast_forward())) : 1u);
++    }
+     for (size_t i = 0; i < keymap::kActionCount; i++) {
+         if (keymap::action(i).buttons != 0 && any_pressed(keys.codes[i])) {
+             result.buttons |= keymap::action(i).buttons;
+diff --git a/engine/src/input/keymap.cpp b/engine/src/input/keymap.cpp
+index 93dcb59..9e1799b 100644
+--- a/engine/src/input/keymap.cpp
++++ b/engine/src/input/keymap.cpp
+@@ -30,7 +30,7 @@ constexpr ActionInfo kActions[kActionCount] = {
+     {"tilt_right", input::kMotionTiltRight, "E"},
+     {"tilt_up", input::kMotionTiltUp, "R"},
+     {"tilt_down", input::kMotionTiltDown, "F"},
+-    {"grip", 0, "Tab"},
++    {"grip", 0, "F8"},
+     {"screenshot", 0, "F9"},
+     {"mouse_motion", 0, "Z"},
+     {"nunchuk_c", input::kNunchukC, "C"},
+@@ -39,6 +39,7 @@ constexpr ActionInfo kActions[kActionCount] = {
+     {"stick_down", input::kStickDown, "S"},
+     {"stick_left", input::kStickLeft, "A"},
+     {"stick_right", input::kStickRight, "D"},
++    {"fast_forward", 0, "Tab"},  // hold to fast-forward (hmap-recomp engine patch 0008)
+ };
+ 
+ struct Key {
+diff --git a/engine/src/platform/settings.cpp b/engine/src/platform/settings.cpp
+index 9c1e025..1179e37 100644
+--- a/engine/src/platform/settings.cpp
++++ b/engine/src/platform/settings.cpp
+@@ -43,6 +43,7 @@ const Option kBaseOptions[] = {
+     {"system.language", "auto"},
+     {"system.pal60", "1"},
+     {"system.skip_notices", "1"},
++    {"system.fast_forward", "4"},
+     {"system.options_menu", "1"},
+     {"audio.mute", "0"},
+     {"audio.wiimote_speaker", "1"},

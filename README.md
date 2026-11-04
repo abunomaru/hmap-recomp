@@ -80,6 +80,7 @@ For a headless home server (build only, no window), see [docs/LOCAL_SERVER.md](d
 | D-pad | arrow keys | D-pad |
 | Pointer | mouse | gyro (if the pad has one) |
 | + / − / 1 / 2 / Home | + / − / 1 / 2 / H | |
+| **Fast-forward** (hold) | Tab | |
 
 Set `input.nunchuk=0` in `games/hmap/settings.ini` (or `WP_NUNCHUK=0`) to unplug the Nunchuk.
 Keys can be rebound in the same file.
@@ -93,6 +94,7 @@ Keys can be rebound in the same file.
 | `video.scale` | 1–6 | internal resolution multiplier (1 = Wii's 640×480) |
 | `video.efb_to_ram` | 2 auto (default), 1 always, 0 never | how GPU-rendered copies reach game memory. `1` is exact but slow in this game (it renders ~20 copies per frame); `0` is fastest but may break photo-album thumbnails, as in Dolphin |
 | `input.nunchuk` | 1 / 0 | Nunchuk plugged in |
+| `system.fast_forward` | 2–16 (default 4) | speed while holding the fast-forward key (Tab). Speeds up the game clock and screen refresh; parts limited by audio or disc timing speed up less |
 
 ## 60 fps
 
