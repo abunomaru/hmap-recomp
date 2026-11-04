@@ -34,6 +34,7 @@ jobs:
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-python
             mingw-w64-ucrt-x86_64-abseil-cpp
+            mingw-w64-ucrt-x86_64-gdb
       - name: Synthetic game (analyze + recompile)
         run: |
           sh tests/make_synthetic_game.sh
@@ -45,25 +46,35 @@ jobs:
       - name: Build (aurora)
         if: matrix.variant == 'aurora'
         run: python hmap.py build --aurora --console
-      - name: Start the aurora build for 20 seconds (software D3D12 / WARP)
-        if: matrix.variant == 'aurora'
+      - name: Start the game for 20 seconds (aurora on software D3D12 / WARP)
+        id: start
+        continue-on-error: ${{ matrix.variant == 'classic' }}
         shell: pwsh
         run: |
           cd extern/wiiparty-recomp
+          $dir = if ("${{ matrix.variant }}" -eq "aurora") { "build/out-hmap-aurora" } else { "build/out-hmap" }
           # Plain PowerShell without the MSYS2 bin directory on PATH, as when a player double-clicks play.bat.
-          Get-ChildItem build/out-hmap-aurora/*.dll | ForEach-Object { Write-Host "bundled: $($_.Name)" }
+          Get-ChildItem "$dir/*.dll" | ForEach-Object { Write-Host "bundled: $($_.Name)" }
           $env:WP_ALLOW_CPU_GPU = "1"
-          $env:WP_LOG_FILE = "$PWD/aurora-run.log"
-          $p = Start-Process -FilePath build/out-hmap-aurora/hmap.exe -ArgumentList "games/hmap/extracted" -PassThru -NoNewWindow
+          $env:WP_LOG_FILE = "$PWD/run.log"
+          $p = Start-Process -FilePath "$dir/hmap.exe" -ArgumentList "games/hmap/extracted" -PassThru -NoNewWindow
           $exited = $p.WaitForExit(20000)
-          if (Test-Path aurora-run.log) { Get-Content aurora-run.log | Select-String "aurora|video|crash" | Select-Object -First 30 }
+          if (Test-Path run.log) { Get-Content run.log -Tail 60 }
           if ($exited) {
             $code = $p.ExitCode
             if ($code -eq -1073741515) { Write-Error "hmap.exe could not find a DLL (0xC0000135)"; exit 1 }
             Write-Error "hmap.exe exited early with code $code"; exit 1
           }
           Stop-Process -Id $p.Id -Force
-          if (-not (Select-String -Path aurora-run.log -Pattern "on aurora" -Quiet)) { Write-Error "aurora did not start"; exit 1 }
+          if ("${{ matrix.variant }}" -eq "aurora" -and -not (Select-String -Path run.log -Pattern "on aurora" -Quiet)) { Write-Error "aurora did not start"; exit 1 }
+      - name: On failure, find where the exception is thrown (gdb)
+        if: always() && steps.start.outcome == 'failure'
+        timeout-minutes: 5
+        run: |
+          cd extern/wiiparty-recomp
+          dir=build/out-hmap; [ "${{ matrix.variant }}" = aurora ] && dir=build/out-hmap-aurora
+          WP_ALLOW_CPU_GPU=1 timeout 120 gdb -batch -ex "set pagination off" -ex "catch throw" -ex run -ex "thread apply all bt 25" \
+            --args "$dir/hmap.exe" games/hmap/extracted 2>&1 | grep -v "^\[New Thread\|^\[Thread .* exited" | tail -150 || true
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
