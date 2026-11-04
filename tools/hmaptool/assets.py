@@ -123,21 +123,27 @@ def install_textures() -> int:
         return 0
     target = project.ENGINE_GAME / "textures" / "load"
     target.mkdir(parents=True, exist_ok=True)
+    aurora_target = project.ENGINE_GAME / "aurora" / "texture_replacements"  # aurora renderer
+    aurora_target.mkdir(parents=True, exist_ok=True)
     copied = 0
     for item in sorted(source.iterdir()):
         if item.is_dir():
             for file in item.rglob("*"):
                 if file.is_file() and file.suffix.lower() in (".png", ".dds"):
                     shutil.copy2(file, target / file.name)
+                    shutil.copy2(file, aurora_target / file.name)
                     copied += 1
         elif item.suffix.lower() == ".zip":
             with zipfile.ZipFile(item) as archive:
                 for member in archive.infolist():
                     name = Path(member.filename).name
                     if not member.is_dir() and Path(name).suffix.lower() in (".png", ".dds") and ".." not in member.filename:
-                        (target / name).write_bytes(archive.read(member))
+                        data = archive.read(member)
+                        (target / name).write_bytes(data)
+                        (aurora_target / name).write_bytes(data)
                         copied += 1
         elif item.suffix.lower() in (".png", ".dds"):
             shutil.copy2(item, target / item.name)
+            shutil.copy2(item, aurora_target / item.name)
             copied += 1
     return copied

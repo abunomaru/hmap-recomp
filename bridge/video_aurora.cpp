@@ -17,6 +17,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <string>
+
+#include <imgui.h>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -24,6 +28,7 @@
 #include "aurora_bridge.h"
 #include "wp/game.h"
 #include "wp/gx.h"
+#include "wp/input.h"
 #include "wp/log.h"
 #include "wp/memory.h"
 #include "wp/settings.h"
@@ -117,6 +122,62 @@ SDL_Scancode scancode_for(int vk) {
     return SDL_SCANCODE_UNKNOWN;
 }
 
+bool g_menu_open = false;
+
+// Edge-triggered key (F10, F11) read from SDL's keyboard state on the game thread.
+bool pressed_once(SDL_Scancode key) {
+    static bool held[SDL_SCANCODE_COUNT] = {};
+    const bool* state = SDL_GetKeyboardState(nullptr);
+    bool down = state && state[key];
+    bool edge = down && !held[key];
+    held[key] = down;
+    return edge;
+}
+
+void store_number(const char* key, int value) {
+    settings::store(key, std::to_string(value));
+}
+
+// F10 settings window (ImGui, drawn into the current aurora frame).
+void draw_menu() {
+    ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Harvest Moon: Animal Parade - Settings (F10)", &g_menu_open)) {
+        ImGui::End();
+        return;
+    }
+    static const char* kInterpolation[] = {"Off (30 fps)", "120 Hz", "180 Hz", "240 Hz"};
+    static const int kTargets[] = {0, 120, 180, 240};
+    int target = settings::number("video.interpolation", "WP_INTERPOLATION");
+    int current = 0;
+    for (int i = 0; i < 4; i++) {
+        if (kTargets[i] == target) current = i;
+    }
+    if (ImGui::Combo("Frame interpolation", &current, kInterpolation, 4)) {
+        store_number("video.interpolation", kTargets[current]);
+    }
+    ImGui::TextDisabled("Smooths camera and scenery between the game's 30 frames.\nExperimental.");
+    ImGui::Separator();
+    int speed = std::max(2, settings::number("system.fast_forward", "WP_FAST_FORWARD"));
+    if (ImGui::SliderInt("Fast-forward speed (hold Tab)", &speed, 2, 16)) {
+        store_number("system.fast_forward", speed);
+    }
+    bool nunchuk = settings::flag("input.nunchuk", "WP_NUNCHUK");
+    if (ImGui::Checkbox("Nunchuk connected", &nunchuk)) {
+        settings::store("input.nunchuk", nunchuk ? "1" : "0");
+    }
+    bool mute = settings::flag("audio.mute", nullptr);
+    if (ImGui::Checkbox("Mute", &mute)) {
+        settings::store("audio.mute", mute ? "1" : "0");
+    }
+    bool fullscreen = aurora_get_display_mode() != AURORA_DISPLAY_MODE_WINDOWED;
+    if (ImGui::Checkbox("Fullscreen (F11)", &fullscreen)) {
+        aurora_set_display_mode(fullscreen ? AURORA_DISPLAY_MODE_BORDERLESS : AURORA_DISPLAY_MODE_WINDOWED);
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Controls: W/A/S/D stick, C/X = C/Z, Enter/Space = A,\nBackspace = B, arrows = D-pad, Tab = fast-forward.\nKeys can be changed in games/hmap/settings.ini.");
+    ImGui::End();
+}
+
 }  // namespace
 
 void start() {
@@ -126,6 +187,11 @@ void start() {
     config.vsync = false;
     // Software GPUs (llvmpipe/lavapipe) are refused unless asked for: used by tests and CI.
     config.allowCpuAdapter = std::getenv("WP_ALLOW_CPU_GPU") != nullptr;
+    // Keep aurora's files (shader caches, texture_replacements/) beside the game's other files.
+    static const std::string user_path = std::filesystem::absolute("games/hmap/aurora").string();
+    std::filesystem::create_directories(user_path + "/texture_replacements");
+    config.userPath = user_path.c_str();
+    config.allowTextureReplacements = true;
     static char program[] = "hmap";
     static char* argv[] = {program, nullptr};
     AuroraInfo info = aurora_initialize(1, argv, &config);
@@ -146,6 +212,14 @@ void present() {
     static int retraces_without_image = 0;
     gx::process();  // flushes pending GX bytes through the tap into this frame
     pump_events();
+    if (pressed_once(SDL_SCANCODE_F10)) {
+        g_menu_open = !g_menu_open;
+    }
+    if (pressed_once(SDL_SCANCODE_F11)) {
+        bool windowed = aurora_get_display_mode() == AURORA_DISPLAY_MODE_WINDOWED;
+        aurora_set_display_mode(windowed ? AURORA_DISPLAY_MODE_BORDERLESS : AURORA_DISPLAY_MODE_WINDOWED);
+    }
+    input::set_blocked(g_menu_open);
     uint64_t copies = g_bridge ? g_bridge->stats().display_copies : 0;
     bool new_image = copies != shown;
     // Screens that never copy to the display (loading) still need frames to be closed.
@@ -173,6 +247,9 @@ void present() {
         aurora_report_producer_paced(true);
     }
     if (g_in_frame) {
+        if (g_menu_open) {
+            draw_menu();
+        }
         aurora_end_frame();
     }
     g_in_frame = aurora_begin_frame();
