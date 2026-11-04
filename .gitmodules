@@ -5,3 +5,4 @@
 [submodule "extern/aurora"]
 	path = extern/aurora
 	url = https://github.com/patchzyy/aurora-wiicompiled
+	ignore = dirty
