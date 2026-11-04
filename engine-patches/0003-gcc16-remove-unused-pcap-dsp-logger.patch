@@ -1,0 +1,35 @@
+diff --git a/third_party/dolphin/Source/Core/Core/DSP/DSPCaptureLogger.h b/third_party/dolphin/Source/Core/Core/DSP/DSPCaptureLogger.h
+index cfa66f2..ed79ccf 100644
+--- a/third_party/dolphin/Source/Core/Core/DSP/DSPCaptureLogger.h
++++ b/third_party/dolphin/Source/Core/Core/DSP/DSPCaptureLogger.h
+@@ -50,27 +50,7 @@ public:
+   void LogDMA(u16 control, u32 gc_address, u16 dsp_address, u16 length, const u8* data) override {}
+ };
+ 
+-// A capture logger implementation that logs to PCAP files in a custom
+-// packet-based format.
+-class PCAPDSPCaptureLogger final : public DSPCaptureLogger
+-{
+-public:
+-  // Automatically creates a writeable file (truncate existing file).
+-  PCAPDSPCaptureLogger(const std::string& pcap_filename);
+-  // Takes ownership of pcap.
+-  PCAPDSPCaptureLogger(Common::PCAP* pcap);
+-  PCAPDSPCaptureLogger(std::unique_ptr<Common::PCAP>&& pcap);
+-
+-  void LogIFXRead(u16 address, u16 read_value) override { LogIFXAccess(true, address, read_value); }
+-  void LogIFXWrite(u16 address, u16 written_value) override
+-  {
+-    LogIFXAccess(false, address, written_value);
+-  }
+-  void LogDMA(u16 control, u32 gc_address, u16 dsp_address, u16 length, const u8* data) override;
+-
+-private:
+-  void LogIFXAccess(bool read, u16 address, u16 value);
+-
+-  std::unique_ptr<Common::PCAP> m_pcap;
+-};
++// PCAPDSPCaptureLogger removed (hmap-recomp engine patch 0003): its .cpp is not part of
++// this trimmed Dolphin copy, and GCC 16's speculative devirtualisation of the
++// `final` class emitted references to it, breaking the link.
+ }  // namespace DSP
