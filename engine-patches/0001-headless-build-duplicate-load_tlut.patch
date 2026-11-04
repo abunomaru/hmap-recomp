@@ -1,0 +1,13 @@
+diff --git a/engine/src/gpu/null_render.cpp b/engine/src/gpu/null_render.cpp
+index d2f72ce..41c8f7e 100644
+--- a/engine/src/gpu/null_render.cpp
++++ b/engine/src/gpu/null_render.cpp
+@@ -55,7 +55,7 @@ void copy_to_texture(uint32_t, uint32_t, int, int, int, int, bool, uint32_t, boo
+ 
+ void invalidate_textures() {}
+ 
+-void load_tlut(uint32_t, uint32_t, uint32_t) {}
++// load_tlut is shared with the real renderers (gx_render_common.cpp)
+ 
+ void clear(int, int, int, int) {}
+ 

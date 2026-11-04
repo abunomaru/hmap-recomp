@@ -1,0 +1,4 @@
+[submodule "extern/wiiparty-recomp"]
+	path = extern/wiiparty-recomp
+	url = https://github.com/arelkair/wiiparty-recomp
+	ignore = dirty

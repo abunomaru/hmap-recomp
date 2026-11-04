@@ -1,0 +1,11 @@
+# Engine plug-in description (read by extern/wiiparty-recomp/recompiler/game.py).
+# `hmap.py analyze` rewrites `id` and the [sdk] addresses for the disc you extracted.
+name = "Harvest Moon: Animal Parade"
+id = "RBIEE9"
+executable = "hmap"
+disc = "disc/hmap.iso"
+
+[sdk]
+# Filled in by `hmap.py analyze` (pattern finder / Dolphin map / manual_symbols.csv).
+os_save_context = 0x00000000
+setjmp = 0x00000000

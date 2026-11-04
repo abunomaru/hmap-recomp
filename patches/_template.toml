@@ -1,0 +1,14 @@
+# Copy this file (without the leading underscore) to create a patch.
+# Files starting with "_" are ignored by `hmap.py patch`.
+# Addresses below are placeholders - they are NOT real Animal Parade addresses.
+
+[patch]
+name = "Example: change one instruction"
+description = "Explain what the patch does, how it was found, and how it was tested."
+game_ids = ["RBIEE9"]   # NTSC-U only; addresses differ per region
+enabled = false
+
+[[patch.write]]
+address = 0x80000000          # placeholder
+original = 0x38600002         # li r3, 2  (verified before writing)
+value = 0x38600001            # li r3, 1

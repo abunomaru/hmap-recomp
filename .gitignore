@@ -1,0 +1,39 @@
+# ---- Game data: NEVER commit anything from your disc -------------------------
+*.iso
+*.wbfs
+*.rvz
+*.wia
+*.ciso
+*.gcm
+*.nkit.*
+*.dol
+*.rel
+*.rel.*
+*.arc
+*.szs
+*.bin
+*.map
+games/*/disc/
+games/*/extracted/
+games/*/nand/
+games/*/backups/
+games/*/textures/
+games/*/reference/
+games/*/settings.ini
+captures/
+screenshots/
+
+# ---- Local tools and build output ---------------------------------------------
+tools/bin/
+build/
+*.part
+
+# ---- Python / editors ----------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+.idea/
+*.swp
+*.log
+/disc/

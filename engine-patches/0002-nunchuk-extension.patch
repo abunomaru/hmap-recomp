@@ -1,0 +1,306 @@
+diff --git a/engine/include/wp/gamepad.h b/engine/include/wp/gamepad.h
+index 331dbd7..8907602 100644
+--- a/engine/include/wp/gamepad.h
++++ b/engine/include/wp/gamepad.h
+@@ -22,6 +22,9 @@ struct State {
+     float pointer_y = 0.0f;
+     bool motion_valid = false;
+     float accel[3] = {0.0f, 0.0f, 1.0f};
++    bool stick_valid = false;
++    float stick_x = 0.0f;
++    float stick_y = 0.0f;
+ };
+ 
+ bool connected(uint32_t slot);
+diff --git a/engine/include/wp/input.h b/engine/include/wp/input.h
+index c2c1338..c3401e5 100644
+--- a/engine/include/wp/input.h
++++ b/engine/include/wp/input.h
+@@ -25,6 +25,13 @@ constexpr uint32_t kMotionTiltRight = 0x100000;
+ constexpr uint32_t kMotionTiltUp = 0x200000;
+ constexpr uint32_t kMotionTiltDown = 0x400000;
+ constexpr uint32_t kMotionSideways = 0x800000;
++// Nunchuk extension (hmap-recomp engine patch 0002)
++constexpr uint32_t kNunchukC = 0x1000000;
++constexpr uint32_t kNunchukZ = 0x2000000;
++constexpr uint32_t kStickUp = 0x4000000;
++constexpr uint32_t kStickDown = 0x8000000;
++constexpr uint32_t kStickLeft = 0x10000000;
++constexpr uint32_t kStickRight = 0x20000000;
+ 
+ struct MouseMotionState {
+     bool tracking = false;
+@@ -44,6 +51,11 @@ struct Sample {
+     float pointer_y = 0.0f;
+     bool motion_valid = false;
+     float accel[3] = {0.0f, 0.0f, 1.0f};
++    // Nunchuk stick from an analog source, -1..1 with +y = up. When not valid the
++    // digital kStick* bits are used instead.
++    bool stick_valid = false;
++    float stick_x = 0.0f;
++    float stick_y = 0.0f;
+ };
+ 
+ bool connected(uint32_t channel);
+diff --git a/engine/include/wp/keymap.h b/engine/include/wp/keymap.h
+index 53da3a5..83bd447 100644
+--- a/engine/include/wp/keymap.h
++++ b/engine/include/wp/keymap.h
+@@ -33,6 +33,12 @@ enum class Action {
+     Grip,
+     Screenshot,
+     MouseMotion,
++    NunchukC,
++    NunchukZ,
++    StickUp,
++    StickDown,
++    StickLeft,
++    StickRight,
+     Count,
+ };
+ 
+diff --git a/engine/src/input/gamepad.cpp b/engine/src/input/gamepad.cpp
+index 6d2ad1f..b2397d4 100644
+--- a/engine/src/input/gamepad.cpp
++++ b/engine/src/input/gamepad.cpp
+@@ -482,10 +482,21 @@ State poll(uint32_t slot, bool sideways) {
+     pressed.held[padmap::kRightStickRight] = current.right_x > kStickThreshold;
+     bool motion_mode = held(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+     b |= padmap::buttons(pressed, sideways, padmap::current_mapping());
+-    bool left = held(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || current.left_x < -kStickThreshold;
+-    bool right = held(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || current.left_x > kStickThreshold;
+-    bool up = (held(SDL_GAMEPAD_BUTTON_DPAD_UP) && !motion_mode) || current.left_y < -kStickThreshold;
+-    bool down = (held(SDL_GAMEPAD_BUTTON_DPAD_DOWN) && !motion_mode) || current.left_y > kStickThreshold;
++    // With the Nunchuk attached the left stick is the Nunchuk stick (not the D-pad),
++    // the left shoulder is C and the left trigger is Z.
++    static const settings::LiveFlag nunchuk("input.nunchuk", "WP_NUNCHUK");
++    bool stick_is_nunchuk = nunchuk();
++    float stick_threshold = stick_is_nunchuk ? 2.0f : kStickThreshold;
++    if (stick_is_nunchuk) {
++        state.stick_valid = true;
++        state.stick_x = current.left_x;
++        state.stick_y = -current.left_y;
++        b |= (held(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) ? input::kNunchukC : 0) | (current.left_trigger > kTriggerThreshold ? input::kNunchukZ : 0);
++    }
++    bool left = held(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || current.left_x < -stick_threshold;
++    bool right = held(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || current.left_x > stick_threshold;
++    bool up = (held(SDL_GAMEPAD_BUTTON_DPAD_UP) && !motion_mode) || current.left_y < -stick_threshold;
++    bool down = (held(SDL_GAMEPAD_BUTTON_DPAD_DOWN) && !motion_mode) || current.left_y > stick_threshold;
+     if (sideways) {
+         b |= (left ? input::kButtonUp : 0) | (right ? input::kButtonDown : 0) | (up ? input::kButtonRight : 0) | (down ? input::kButtonLeft : 0);
+     } else {
+diff --git a/engine/src/input/input.cpp b/engine/src/input/input.cpp
+index b1339d8..a4f0ef4 100644
+--- a/engine/src/input/input.cpp
++++ b/engine/src/input/input.cpp
+@@ -189,6 +189,9 @@ Sample gamepad_sample(uint32_t channel, bool sideways) {
+     for (int i = 0; i < 3; i++) {
+         result.accel[i] = pad.accel[i];
+     }
++    result.stick_valid = pad.stick_valid;
++    result.stick_x = pad.stick_x;
++    result.stick_y = pad.stick_y;
+     return result;
+ }
+ 
+@@ -327,6 +330,11 @@ Sample device_sample(uint32_t channel) {
+     }
+     gamepad::State pad = gamepad::poll(channel, sideways);
+     result.buttons |= pad.buttons;
++    if (pad.stick_valid && (pad.stick_x * pad.stick_x + pad.stick_y * pad.stick_y) > 0.04f) {
++        result.stick_valid = true;
++        result.stick_x = pad.stick_x;
++        result.stick_y = pad.stick_y;
++    }
+     if (pad.motion_valid) {
+         result.motion_valid = true;
+         for (int i = 0; i < 3; i++) {
+diff --git a/engine/src/input/keymap.cpp b/engine/src/input/keymap.cpp
+index c983f0a..93dcb59 100644
+--- a/engine/src/input/keymap.cpp
++++ b/engine/src/input/keymap.cpp
+@@ -17,10 +17,12 @@ constexpr ActionInfo kActions[kActionCount] = {
+     {"plus", input::kButtonPlus, "Plus,NumPlus"},
+     {"minus", input::kButtonMinus, "Minus,NumMinus"},
+     {"home", input::kButtonHome, "H"},
+-    {"up", input::kButtonUp, "Up,W"},
+-    {"down", input::kButtonDown, "Down,S"},
+-    {"left", input::kButtonLeft, "Left,A"},
+-    {"right", input::kButtonRight, "Right,D"},
++    // Harvest Moon: Animal Parade moves with the Nunchuk stick, so W/A/S/D drive the
++    // stick and the arrow keys keep the D-pad (hmap-recomp engine patch 0002).
++    {"up", input::kButtonUp, "Up"},
++    {"down", input::kButtonDown, "Down"},
++    {"left", input::kButtonLeft, "Left"},
++    {"right", input::kButtonRight, "Right"},
+     {"shake", input::kMotionShake, "MouseMiddle,LeftShift"},
+     {"swing_up", input::kMotionSwingUp, "WheelUp,T"},
+     {"swing_down", input::kMotionSwingDown, "WheelDown,G"},
+@@ -31,6 +33,12 @@ constexpr ActionInfo kActions[kActionCount] = {
+     {"grip", 0, "Tab"},
+     {"screenshot", 0, "F9"},
+     {"mouse_motion", 0, "Z"},
++    {"nunchuk_c", input::kNunchukC, "C"},
++    {"nunchuk_z", input::kNunchukZ, "X"},
++    {"stick_up", input::kStickUp, "W"},
++    {"stick_down", input::kStickDown, "S"},
++    {"stick_left", input::kStickLeft, "A"},
++    {"stick_right", input::kStickRight, "D"},
+ };
+ 
+ struct Key {
+diff --git a/engine/src/input/wiimote.cpp b/engine/src/input/wiimote.cpp
+index 2bb8197..c291889 100644
+--- a/engine/src/input/wiimote.cpp
++++ b/engine/src/input/wiimote.cpp
+@@ -26,6 +26,7 @@ constexpr uint32_t kMaxWiimotes = 4;
+ constexpr uint32_t kEepromSize = 0x1700;
+ constexpr uint8_t kCameraAddress = 0x58;
+ constexpr uint8_t kSpeakerAddress = 0x51;
++constexpr uint8_t kExtensionAddress = 0x52;
+ constexpr uint8_t kCameraDataOffset = 0x37;
+ constexpr uint8_t kCameraTrackingRegister = 0x30;
+ constexpr uint8_t kCameraModeRegister = 0x33;
+@@ -69,6 +70,16 @@ constexpr uint8_t kAccelOneG = 0x9A;
+ constexpr std::array<uint8_t, 24> kEeprom16D0 = {0x00, 0x00, 0x00, 0xFF, 0x11, 0xEE, 0x00, 0x00, 0x33, 0xCC, 0x44, 0xBB,
+                                                  0x00, 0x00, 0x66, 0x99, 0x77, 0x88, 0x00, 0x00, 0x2B, 0x01, 0xE8, 0x13};
+ 
++// Nunchuk extension registers (hmap-recomp engine patch 0002, after Dolphin's
++// WiimoteEmu Nunchuk): ID at 0xFA, calibration at 0x20 and 0x30, input at 0x00.
++constexpr std::array<uint8_t, 6> kNunchukId = {0x00, 0x00, 0xA4, 0x20, 0x00, 0x00};
++constexpr uint8_t kNunchukAccelZero = 0x80;
++constexpr uint8_t kNunchukAccelOneG = 0xB3;
++constexpr uint8_t kNunchukStickCenter = 0x80;
++constexpr uint8_t kNunchukStickRadius = 0x60;
++constexpr uint8_t kExtensionEncryption = 0xF0;
++constexpr uint8_t kExtensionEncrypted = 0xAA;
++
+ constexpr auto kReportInterval = std::chrono::microseconds(5000);
+ constexpr double kReportSeconds = 0.005;
+ constexpr double kPi = 3.14159265358979323846;
+@@ -102,6 +113,9 @@ struct State {
+     std::array<uint8_t, kEepromSize> eeprom{};
+     std::array<uint8_t, 0x100> camera{};
+     std::array<uint8_t, 0x100> speaker_registers{};
++    std::array<uint8_t, 0x100> extension{};
++    bool extension_attached = false;
++    bool warned_encryption = false;
+     SpeakerDecoder decoder;
+     ReadRequest read;
+     std::chrono::steady_clock::time_point next_report{};
+@@ -148,6 +162,58 @@ void fill_eeprom(State& state) {
+     std::copy(kEeprom16D0.begin(), kEeprom16D0.end(), state.eeprom.begin() + 0x16D0);
+ }
+ 
++void fill_nunchuk(State& state) {
++    state.extension.fill(0);
++    std::array<uint8_t, 16> calibration = {
++        kNunchukAccelZero, kNunchukAccelZero, kNunchukAccelZero, 0,
++        kNunchukAccelOneG, kNunchukAccelOneG, kNunchukAccelOneG, 0,
++        static_cast<uint8_t>(kNunchukStickCenter + kNunchukStickRadius), static_cast<uint8_t>(kNunchukStickCenter - kNunchukStickRadius), kNunchukStickCenter,
++        static_cast<uint8_t>(kNunchukStickCenter + kNunchukStickRadius), static_cast<uint8_t>(kNunchukStickCenter - kNunchukStickRadius), kNunchukStickCenter,
++        0, 0,
++    };
++    uint8_t sum = static_cast<uint8_t>(std::accumulate(calibration.begin(), calibration.end() - 2, 0));
++    calibration[14] = static_cast<uint8_t>(sum + 0x55);
++    calibration[15] = static_cast<uint8_t>(sum + 0xAA);
++    std::copy(calibration.begin(), calibration.end(), state.extension.begin() + 0x20);
++    std::copy(calibration.begin(), calibration.end(), state.extension.begin() + 0x30);
++    std::copy(kNunchukId.begin(), kNunchukId.end(), state.extension.begin() + 0xFA);
++}
++
++uint8_t stick_byte(float value) {
++    float clamped = std::clamp(value, -1.0f, 1.0f);
++    return static_cast<uint8_t>(std::lround(kNunchukStickCenter + clamped * kNunchukStickRadius));
++}
++
++// Six bytes of Nunchuk input at register 0x00: stick X/Y, accelerometer X/Y/Z
++// (upper 8 bits) and a byte with the active-low C/Z buttons and the low accel bits.
++void update_nunchuk(State& state, const input::Sample& sample) {
++    float x = 0.0f;
++    float y = 0.0f;
++    if (sample.stick_valid) {
++        x = sample.stick_x;
++        y = sample.stick_y;
++    } else {
++        x = ((sample.buttons & input::kStickRight) ? 1.0f : 0.0f) - ((sample.buttons & input::kStickLeft) ? 1.0f : 0.0f);
++        y = ((sample.buttons & input::kStickUp) ? 1.0f : 0.0f) - ((sample.buttons & input::kStickDown) ? 1.0f : 0.0f);
++        if (x != 0.0f && y != 0.0f) {
++            x *= 0.7071f;
++            y *= 0.7071f;
++        }
++    }
++    // Held upright and still: 0 g on X/Y, 1 g on Z.
++    const uint16_t ax = kNunchukAccelZero << 2;
++    const uint16_t ay = kNunchukAccelZero << 2;
++    const uint16_t az = kNunchukAccelOneG << 2;
++    uint8_t* data = state.extension.data();
++    data[0] = stick_byte(x);
++    data[1] = stick_byte(y);
++    data[2] = static_cast<uint8_t>(ax >> 2);
++    data[3] = static_cast<uint8_t>(ay >> 2);
++    data[4] = static_cast<uint8_t>(az >> 2);
++    data[5] = static_cast<uint8_t>(((sample.buttons & input::kNunchukZ) ? 0 : 0x01) | ((sample.buttons & input::kNunchukC) ? 0 : 0x02) | ((ax & 3) << 2) |
++                                   ((ay & 3) << 4) | ((az & 3) << 6));
++}
++
+ void put_buttons(std::vector<uint8_t>& report, uint16_t buttons) {
+     report.push_back(static_cast<uint8_t>(buttons & 0xFF));
+     report.push_back(static_cast<uint8_t>(buttons >> 8));
+@@ -170,7 +236,7 @@ void send_ack(State& state, const Sender& send, uint8_t report, uint8_t error) {
+ void send_status(State& state, const Sender& send) {
+     std::vector<uint8_t> payload = {kInputStatus};
+     put_buttons(payload, state.buttons);
+-    uint8_t flags = static_cast<uint8_t>((state.speaker ? 0x04 : 0) | (state.ir ? 0x08 : 0) | (state.leds << 4));
++    uint8_t flags = static_cast<uint8_t>((state.extension_attached ? 0x02 : 0) | (state.speaker ? 0x04 : 0) | (state.ir ? 0x08 : 0) | (state.leds << 4));
+     payload.push_back(flags);
+     payload.push_back(0);
+     payload.push_back(0);
+@@ -185,6 +251,9 @@ std::array<uint8_t, 0x100>* i2c_device(State& state, uint8_t slave) {
+     if (slave == kSpeakerAddress) {
+         return &state.speaker_registers;
+     }
++    if (slave == kExtensionAddress) {
++        return state.extension_attached ? &state.extension : nullptr;
++    }
+     return nullptr;
+ }
+ 
+@@ -431,7 +500,18 @@ void send_data_report(State& state, const Sender& send, const input::Sample& sam
+             payload.insert(payload.end(), ir_size, 0xFF);
+         }
+     }
+-    payload.insert(payload.end(), ext_size, 0xFF);
++    if (ext_size && state.extension_attached) {
++        update_nunchuk(state, sample);
++        if (state.extension[kExtensionEncryption] == kExtensionEncrypted && !state.warned_encryption) {
++            // Pre-2008 SDKs enable the extension's XOR encryption; this model only
++            // implements the unencrypted init (0x55 to 0xF0, 0x00 to 0xFB).
++            std::fprintf(stderr, "WIIMOTE extension encryption requested; Nunchuk data will be wrong\n");
++            state.warned_encryption = true;
++        }
++        payload.insert(payload.end(), state.extension.begin(), state.extension.begin() + ext_size);
++    } else {
++        payload.insert(payload.end(), ext_size, 0xFF);
++    }
+     send_input(send, payload);
+ }
+ 
+@@ -632,6 +712,17 @@ void update(uint32_t index, const Sender& send) {
+     input::Sample sample = input::sample(index);
+     state.buttons = static_cast<uint16_t>(sample.buttons & 0x9F1F);
+     update_motion(state, sample);
++    static const settings::LiveFlag nunchuk("input.nunchuk", "WP_NUNCHUK");
++    bool want_extension = nunchuk();
++    if (want_extension != state.extension_attached) {
++        // Plugging or unplugging an extension makes the remote send a status report.
++        state.extension_attached = want_extension;
++        if (want_extension) {
++            fill_nunchuk(state);
++        }
++        send_status(state, send);
++        return;
++    }
+     if (process_read(state, send)) {
+         return;
+     }
