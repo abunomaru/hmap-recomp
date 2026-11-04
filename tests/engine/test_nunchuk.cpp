@@ -78,5 +78,39 @@ int main() {
     }
     expect(report_ok, "mode 0x35 report carries centred stick, released C/Z, 1 g on Z");
 
+    // Encryption (engine patch 0004): 0xAA to 0xF0 and an all-zero key at 0x40. WiiBrew documents
+    // the zero-key case as decrypted = (byte ^ 0x17) + 0x17, independent of Dolphin's tables.
+    std::vector<uint8_t> enable(22, 0);
+    enable[0] = 0x16; enable[1] = 0x04; enable[2] = 0xA4; enable[3] = 0x00; enable[4] = 0xF0; enable[5] = 1; enable[6] = 0xAA;
+    output(enable);
+    std::vector<uint8_t> key(22, 0);
+    key[0] = 0x16; key[1] = 0x04; key[2] = 0xA4; key[3] = 0x00; key[4] = 0x40; key[5] = 16;
+    output(key);
+    g_frames.clear();
+    output({0x17, 0x04, 0xA4, 0x00, 0xFA, 0x00, 0x06});
+    bool enc_ok = !g_frames.empty() && g_frames.back()[1] == 0x21;
+    if (enc_ok) {
+        const uint8_t* data = g_frames.back().data() + 7;
+        const uint8_t expected[6] = {0x00, 0x00, 0xA4, 0x20, 0x00, 0x00};
+        bool differs = false;
+        for (int i = 0; i < 6; i++) {
+            uint8_t plain = static_cast<uint8_t>((data[i] ^ 0x17) + 0x17);
+            enc_ok = enc_ok && plain == expected[i];
+            differs = differs || data[i] != expected[i];
+        }
+        enc_ok = enc_ok && differs;
+    }
+    expect(enc_ok, "encrypted ID read decrypts to the Nunchuk ID (zero key)");
+
+    g_frames.clear();
+    tick();
+    bool enc_report = !g_frames.empty() && g_frames.back()[1] == 0x35;
+    if (enc_report) {
+        const uint8_t* ext = g_frames.back().data() + 7;
+        enc_report = static_cast<uint8_t>((ext[0] ^ 0x17) + 0x17) == 0x80 && static_cast<uint8_t>((ext[1] ^ 0x17) + 0x17) == 0x80 &&
+                     (static_cast<uint8_t>((ext[5] ^ 0x17) + 0x17) & 0x03) == 0x03;
+    }
+    expect(enc_report, "encrypted data report decrypts to a centred stick with C/Z released");
+
     return g_failures == 0 ? 0 : 1;
 }

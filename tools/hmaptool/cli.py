@@ -353,6 +353,9 @@ def cmd_run(args) -> int:
     if not exe.exists():
         raise SystemExit("not built yet - run `hmap.py build`")
     env = dict(os.environ)
+    if args.log:
+        env["WP_LOG_FILE"] = str(Path(args.log).resolve())
+        print(f"engine log: {env['WP_LOG_FILE']} (CPU/GPU thread load once per second)")
     if args.dump_dsp:
         Path(args.dump_dsp).mkdir(parents=True, exist_ok=True)
         env["WP_DUMP_DSP_CODE"] = str(Path(args.dump_dsp).resolve())
@@ -423,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("run", help="run the built game")
     p.add_argument("--dump-dsp", metavar="DIR", help="write uploaded DSP microcode images to DIR")
+    p.add_argument("--log", metavar="FILE", help="write the engine log (performance, threads, errors) to FILE")
     p.add_argument("args", nargs=argparse.REMAINDER)
     p.set_defaults(func=cmd_run)
 

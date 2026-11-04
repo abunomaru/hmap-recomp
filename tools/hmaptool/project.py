@@ -61,36 +61,71 @@ def _exclude_in_engine_git() -> None:
 ENGINE_PATCHES = ROOT / "engine-patches"
 
 
+def _patch_targets(patch: Path) -> tuple[set[str], set[str]]:
+    """Files a patch modifies, and files it creates."""
+    modified, created = set(), set()
+    previous = ""
+    for line in patch.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("+++ b/"):
+            path = line[6:].strip()
+            (created if previous == "--- /dev/null" else modified).add(path)
+        previous = line.strip()
+    return modified, created
+
+
+def _engine_git_path(name: str) -> Path:
+    path = subprocess.run(["git", "rev-parse", "--git-path", name], cwd=ENGINE,
+                          check=True, capture_output=True, text=True).stdout.strip()
+    return Path(path) if Path(path).is_absolute() else ENGINE / path
+
+
 def apply_engine_patches(verbose: bool = False) -> list[str]:
-    """Apply engine-patches/*.patch to the submodule (idempotent).
+    """Apply engine-patches/*.patch, in order, to the submodule's working tree.
 
-    The engine stays a pristine pinned upstream commit in git; our fixes and
-    additions for this game live as reviewable patch files and are applied to the
-    working tree. A patch that neither applies nor is already applied stops the
-    pipeline (usually: the submodule was bumped and the patch needs a rebase)."""
+    The engine stays a pristine pinned upstream commit in git; our fixes live as
+    reviewable patch files. A stamp (inside the submodule's git dir) records which
+    patch contents were applied. When the set changes, every file the patches touch
+    is restored to the pinned commit and the whole series is applied again, so later
+    patches can build on earlier ones (0004 on top of 0002) without confusing the
+    "already applied?" check."""
+    import hashlib
+
+    patches = sorted(ENGINE_PATCHES.glob("*.patch"))
+    digest = hashlib.sha256()
+    for patch in patches:
+        digest.update(patch.name.encode() + b"\0" + patch.read_bytes())
+    wanted = digest.hexdigest()
+    stamp = _engine_git_path("hmap-engine-patches.stamp")
+    if stamp.exists() and stamp.read_text().strip() == wanted:
+        if verbose:
+            print("engine patches up to date")
+        return []
+
+    modified, created = set(), set()
+    for patch in patches:
+        m, c = _patch_targets(patch)
+        modified |= m
+        created |= c
+    tracked = sorted(modified - created)
+    if tracked:
+        subprocess.run(["git", "checkout", "--", *tracked], cwd=ENGINE, check=True, capture_output=True)
+    for path in created:
+        (ENGINE / path).unlink(missing_ok=True)
+
     applied = []
-    for patch in sorted(ENGINE_PATCHES.glob("*.patch")):
-        def git_apply(*extra):
-            return subprocess.run(["git", "apply", *extra, str(patch)], cwd=ENGINE, capture_output=True, text=True)
-
-        if git_apply("--reverse", "--check").returncode == 0:
-            if verbose:
-                print(f"engine patch already applied: {patch.name}")
-            continue
-        # Windows checkouts with core.autocrlf=true have CRLF files; retry ignoring whitespace.
-        extra = ()
-        check = git_apply("--check")
-        if check.returncode != 0:
-            extra = ("--ignore-whitespace",)
-            if git_apply("--reverse", "--check", *extra).returncode == 0:
-                continue
-            check = git_apply("--check", *extra)
-        if check.returncode != 0:
-            raise SystemExit(f"engine patch {patch.name} does not apply:\n{check.stderr}\n"
+    for patch in patches:
+        args = ["git", "apply", str(patch)]
+        result = subprocess.run(args, cwd=ENGINE, capture_output=True, text=True)
+        if result.returncode != 0:
+            # Windows checkouts with core.autocrlf=true have CRLF files.
+            result = subprocess.run(["git", "apply", "--ignore-whitespace", str(patch)], cwd=ENGINE, capture_output=True, text=True)
+        if result.returncode != 0:
+            stamp.unlink(missing_ok=True)
+            raise SystemExit(f"engine patch {patch.name} does not apply:\n{result.stderr}\n"
                              "On Windows, clone with: git -c core.autocrlf=false clone --recursive ...")
-        git_apply(*extra)
         applied.append(patch.name)
         print(f"engine patch applied: {patch.name}")
+    stamp.write_text(wanted + "\n")
     return applied
 
 

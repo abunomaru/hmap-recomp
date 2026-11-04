@@ -14,18 +14,22 @@ Rough order. Each phase ends with something you can check.
 - [x] DSP microcode locator (`find-dsp`)
 - [x] Engine patch 0001: headless build links
 - [x] Engine patch 0002: Nunchuk extension (stick, C/Z, calibration), keyboard + gamepad mapping
+- [x] Engine patch 0003: GCC 16 link fix (unused Dolphin DSP logger)
+- [x] Engine patch 0004: extension encryption (Dolphin's KeyGen1stParty)
 - [x] Tests: Python tools on synthetic DOLs; Nunchuk protocol test against the engine
 
-## Phase 1: first boot (needs the real disc)
+## Phase 1: first boot (done on RBIEE9, Windows)
 
-- [ ] `extract` + `analyze` on RBIEE9. Record which SDK names came from patterns, the map, or by hand
-- [ ] Check whether the game uses REL modules (`hmap.py info`)
-- [ ] `recompile`: note unsupported instructions and unresolved indirect jumps in the output
-- [ ] `build` + `run`: reach the health-and-safety screen, then the title screen
-- [ ] Run with `WP_LOG_WIIMOTE=1` and confirm the game initialises the Nunchuk unencrypted
-      (writes 0x55 to 0xA400F0). If it asks for encryption, implement it (see Dolphin's
-      `WiimoteEmu/Encryption.cpp`)
-- [ ] Fix crashes. Likely areas: threads/context switches, cache ops, any `setjmp`/`longjmp` use
+- [x] `extract` + `analyze` on RBIEE9: no REL modules; all SDK names found by pattern
+      (OSPanic by caller count; setjmp/longjmp not linked in this game; OSSelectThread
+      found as the caller of both OSSaveContext and OSLoadContext)
+- [x] `recompile`: 19,825 functions, 891,703 instructions, 37 `rfi` + 14 data words +
+      143 indirect calls (same profile as Wii Party)
+- [x] Boots, creates the save, plays the opening cutscene into the first dialogue
+- [x] The game uses the **encrypted** extension protocol: engine patch 0004 ports Dolphin's
+      first-party key generation and encryption
+- [ ] Frame rate: 6 fps in the opening cutscene. Profile with `hmap.py run --log`
+      (CPU vs GPU thread load), then translate the DSP microcode ahead of time
 
 ## Phase 2: playable at 30 fps
 
