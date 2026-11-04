@@ -46,9 +46,8 @@ jobs:
       - name: Build (aurora)
         if: matrix.variant == 'aurora'
         run: python hmap.py build --aurora --console
-      - name: Start the game for 20 seconds (aurora on software D3D12 / WARP)
+      - name: Run the game (aurora on software D3D12 / WARP); the synthetic game returns after two frames
         id: start
-        continue-on-error: ${{ matrix.variant == 'classic' }}
         shell: pwsh
         run: |
           cd extern/wiiparty-recomp
@@ -58,15 +57,18 @@ jobs:
           $env:WP_ALLOW_CPU_GPU = "1"
           $env:WP_LOG_FILE = "$PWD/run.log"
           $p = Start-Process -FilePath "$dir/hmap.exe" -ArgumentList "games/hmap/extracted" -PassThru -NoNewWindow
-          $exited = $p.WaitForExit(20000)
-          if (Test-Path run.log) { Get-Content run.log -Tail 60 }
-          if ($exited) {
-            $code = $p.ExitCode
-            if ($code -eq -1073741515) { Write-Error "hmap.exe could not find a DLL (0xC0000135)"; exit 1 }
-            Write-Error "hmap.exe exited early with code $code"; exit 1
+          if (-not $p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force; Write-Error "hmap.exe hung"; exit 1 }
+          $p.WaitForExit()
+          if (Test-Path run.log) { Get-Content run.log | Select-String -NotMatch " debug " | Select-Object -Last 40 }
+          $code = $p.ExitCode
+          if ($code -eq -1073741515) { Write-Error "hmap.exe could not find a DLL (0xC0000135)"; exit 1 }
+          if ($code -ne 0) { Write-Error "hmap.exe exited with code $code"; exit 1 }
+          if (Select-String -Path run.log -Pattern "crash" -Quiet) { Write-Error "crash reported in the log"; exit 1 }
+          if (-not (Select-String -Path run.log -Pattern "entry returned|video" -Quiet)) { Write-Error "the game did not run"; exit 1 }
+          if ("${{ matrix.variant }}" -eq "aurora") {
+            if (-not (Select-String -Path run.log -Pattern "on aurora" -Quiet)) { Write-Error "aurora did not start"; exit 1 }
+            if (-not (Select-String -Path run.log -Pattern "aurora shutting down" -Quiet)) { Write-Error "aurora was not shut down"; exit 1 }
           }
-          Stop-Process -Id $p.Id -Force
-          if ("${{ matrix.variant }}" -eq "aurora" -and -not (Select-String -Path run.log -Pattern "on aurora" -Quiet)) { Write-Error "aurora did not start"; exit 1 }
       - name: On failure, find where the exception is thrown (gdb)
         if: always() && steps.start.outcome == 'failure'
         timeout-minutes: 5

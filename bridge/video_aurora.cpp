@@ -200,6 +200,19 @@ void start() {
     static char program[] = "hmap";
     static char* argv[] = {program, nullptr};
     AuroraInfo info = aurora_initialize(1, argv, &config);
+    // Shut aurora down before the process's global destructors run (window closed -> exit(0), or
+    // the game returning). Registered after aurora's globals were constructed, so it runs first.
+    // Otherwise Dawn's device is destroyed while aurora is live, which aurora treats as a fatal
+    // device loss (abort on every quit on Windows), and the pipeline cache is never saved.
+    std::atexit([] {
+        g_bridge = nullptr;  // drop any further GX bytes
+        if (g_in_frame) {
+            g_in_frame = false;
+            aurora_end_frame();  // close the open frame so the render worker is idle
+        }
+        log::write("video", "aurora shutting down");
+        aurora_shutdown();
+    });
     log::write("video", "build %s on aurora, window %ux%u", WP_BUILD, info.windowSize.width, info.windowSize.height);
     static hmap::aurora_bridge::Bridge bridge({g_memory, kPhysicalSize});
     g_bridge = &bridge;

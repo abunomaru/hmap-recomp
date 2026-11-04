@@ -47,3 +47,5 @@ games/*/analysis/sdk_report.txt
 # ---- The player's own files ------------------------------------------------
 assets/*
 !assets/README.md
+# aurora caches and texture packs installed by play
+games/hmap/aurora/

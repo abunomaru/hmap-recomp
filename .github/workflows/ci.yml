@@ -43,13 +43,15 @@ jobs:
           python hmap.py recompile
       - name: Build with aurora
         run: python hmap.py build --aurora
-      - name: Start under Xvfb (software Vulkan) for 20 seconds
+      - name: Run under Xvfb (software Vulkan); the synthetic game returns after two frames
         run: |
           cd extern/wiiparty-recomp
           set +e
-          WP_ALLOW_CPU_GPU=1 XDG_RUNTIME_DIR=/tmp WP_LOG_FILE=$PWD/aurora-run.log timeout 20 xvfb-run -a -s "-screen 0 1280x720x24" ./build/out-hmap-aurora/hmap games/hmap/extracted
+          WP_ALLOW_CPU_GPU=1 XDG_RUNTIME_DIR=/tmp WP_LOG_FILE=$PWD/aurora-run.log timeout 60 xvfb-run -a -s "-screen 0 1280x720x24" ./build/out-hmap-aurora/hmap games/hmap/extracted
           status=$?
           set -e
-          cat aurora-run.log | grep -E "aurora|video" | head -30
-          test $status -eq 124 || { echo "exited early with $status"; exit 1; }
-          grep -q "build .* on aurora" aurora-run.log
+          grep -E "aurora|video|crash" aurora-run.log | grep -v "debug" | tail -30
+          grep -q "build .* on aurora" aurora-run.log || { echo "aurora did not start"; exit 1; }
+          if grep -q "crash" aurora-run.log; then echo "crashed"; exit 1; fi
+          test $status -eq 0 || { echo "exit status $status (124 = hung)"; exit 1; }
+          grep -q "aurora shutting down" aurora-run.log
