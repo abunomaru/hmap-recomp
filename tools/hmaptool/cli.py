@@ -328,23 +328,31 @@ def cmd_build(args) -> int:
     if sys.platform == "win32":
         _run([_python(), project.ENGINE / "tools" / "fetch_sdl.py"], cwd=project.ENGINE)
     configure = [
-        "cmake", "-S", project.ENGINE, "-B", project.cmake_dir(), "-G", "Ninja",
+        "cmake", "-S", project.ENGINE, "-B", project.cmake_dir(args.aurora), "-G", "Ninja",
         f"-DCMAKE_BUILD_TYPE={'Debug' if args.debug else 'Release'}",
         f"-DWP_GAME={project.GAME_KEY}",
         f"-DWP_CODE_OPT={args.code_opt}",
     ]
-    if args.headless:
+    env = None
+    if args.aurora:
+        # aurora renderer: aurora needs clang (its headers do not build with GCC)
+        configure += ["-DWP_AURORA=ON", f"-DWP_AURORA_DIR={project.AURORA}", f"-DWP_BRIDGE_DIR={project.BRIDGE}"]
+        env = dict(os.environ)
+        env.setdefault("CC", "clang")
+        env.setdefault("CXX", "clang++")
+    elif args.headless:
         configure += ["-DWP_FETCH_SDL3=OFF", "-DWP_REQUIRE_SDL3=OFF"]
     else:
         configure.append("-DWP_REQUIRE_SDL3=ON")
+    configure += list(args.cmake_arg or [])
     if args.console:
         configure.append("-DWP_CONSOLE=ON")
-    _run(configure, cwd=project.ENGINE)
-    build = ["cmake", "--build", project.cmake_dir(), "--target", project.GAME_KEY]
+    _run(configure, cwd=project.ENGINE, env=env)
+    build = ["cmake", "--build", project.cmake_dir(args.aurora), "--target", project.GAME_KEY]
     if args.jobs:
         build += ["--parallel", str(args.jobs)]
-    _run(build, cwd=project.ENGINE)
-    print(f"built {project.executable()}")
+    _run(build, cwd=project.ENGINE, env=env)
+    print(f"built {project.executable(args.aurora)}")
     return 0
 
 
@@ -385,7 +393,7 @@ def cmd_all(args) -> int:
         return status
     cmd_patch(argparse.Namespace(list=False, reset=False))
     cmd_recompile(argparse.Namespace())
-    return cmd_build(argparse.Namespace(headless=args.headless, debug=False, console=False, jobs=None, code_opt="-O1"))
+    return cmd_build(argparse.Namespace(headless=args.headless, debug=False, console=False, jobs=None, code_opt="-O1", aurora=False, cmake_arg=None))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -435,6 +443,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--console", action="store_true", help="Windows: keep a console window for logs")
     p.add_argument("--jobs", type=int)
     p.add_argument("--code-opt", default="-O1", help="optimisation flag for translated code (engine default -O1)")
+    p.add_argument("--aurora", action="store_true", help="render with aurora (D3D12/Vulkan/Metal via Dawn); needs clang")
+    p.add_argument("--cmake-arg", action="append", metavar="ARG", help="extra CMake configure argument (repeatable)")
     p.set_defaults(func=cmd_build)
 
     p = sub.add_parser("run", help="run the built game")

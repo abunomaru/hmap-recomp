@@ -23,6 +23,8 @@ GAME_KEY = "hmap"
 REPO_GAME = ROOT / "games" / GAME_KEY
 ENGINE = ROOT / "extern" / "wiiparty-recomp"
 ENGINE_GAME = ENGINE / "games" / GAME_KEY
+AURORA = ROOT / "extern" / "aurora"
+BRIDGE = ROOT / "bridge"
 WORK = ROOT / "build" / GAME_KEY
 PATCHES = ROOT / "patches"
 
@@ -202,13 +204,17 @@ def modules_dir() -> Path:
     return engine_build() / "rel"
 
 
-def cmake_dir() -> Path:
-    return ENGINE / "build" / f"out-{GAME_KEY}"
+def cmake_dir(aurora: bool = False) -> Path:
+    return ENGINE / "build" / (f"out-{GAME_KEY}-aurora" if aurora else f"out-{GAME_KEY}")
 
 
-def executable() -> Path:
+def executable(aurora: bool | None = None) -> Path:
+    """The built game; with aurora=None, the aurora build if it exists, else the classic one."""
     suffix = ".exe" if os.name == "nt" else ""
-    return cmake_dir() / f"{GAME_KEY}{suffix}"
+    if aurora is None:
+        candidate = cmake_dir(True) / f"{GAME_KEY}{suffix}"
+        return candidate if candidate.exists() else cmake_dir(False) / f"{GAME_KEY}{suffix}"
+    return cmake_dir(aurora) / f"{GAME_KEY}{suffix}"
 
 
 # ------------------------------------------------------------------ game settings defaults

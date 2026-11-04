@@ -1,0 +1,109 @@
+diff --git a/engine/CMakeLists.txt b/engine/CMakeLists.txt
+index 62b0d28..fcdd8b2 100644
+--- a/engine/CMakeLists.txt
++++ b/engine/CMakeLists.txt
+@@ -41,7 +41,22 @@ add_library(wp_engine STATIC
+     src/platform/mii.cpp
+     src/platform/options_window.cpp
+ )
+-if(WIN32)
++# aurora renderer (hmap-recomp engine patch 0013): aurora owns the window and draws; the
++# engine keeps parsing GX with the null renderer for its interrupts and register state.
++option(WP_AURORA "Render through aurora (Dawn: D3D12/Vulkan/Metal) instead of the built-in renderers" OFF)
++set(WP_AURORA_DIR "" CACHE PATH "aurora source directory")
++set(WP_BRIDGE_DIR "" CACHE PATH "hmap-recomp bridge directory (aurora_bridge.cpp, video_aurora.cpp)")
++if(WP_AURORA)
++    set(AURORA_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
++    set(AURORA_ENABLE_RMLUI OFF CACHE BOOL "" FORCE)
++    set(AURORA_ENABLE_DVD OFF CACHE BOOL "" FORCE)
++    set(AURORA_ENABLE_CARD OFF CACHE BOOL "" FORCE)
++    add_subdirectory("${WP_AURORA_DIR}" "${CMAKE_BINARY_DIR}/aurora" EXCLUDE_FROM_ALL)
++    target_sources(wp_engine PRIVATE "${WP_BRIDGE_DIR}/aurora_bridge.cpp" "${WP_BRIDGE_DIR}/video_aurora.cpp" src/gpu/null_render.cpp)
++    target_include_directories(wp_engine PRIVATE "${WP_BRIDGE_DIR}")
++    target_link_libraries(wp_engine PUBLIC aurora::core aurora::gx)
++    target_compile_definitions(wp_engine PRIVATE WP_AURORA)
++elseif(WIN32)
+     target_sources(wp_engine PRIVATE src/gpu/gx_render.cpp src/platform/video.cpp)
+ endif()
+ target_sources(wp_engine PRIVATE src/platform/options_render_stb.cpp)
+@@ -63,7 +78,9 @@ if(WP_TRACE_CALLS)
+ endif()
+ target_compile_options(wp_engine PRIVATE -Wall -Wextra)
+ 
+-if(WIN32)
++if(WP_AURORA)
++    set(SDL3_FOUND TRUE)  # aurora brings SDL3; its target is linked through aurora::core
++elseif(WIN32)
+     set(WP_SDL3_DIR "${CMAKE_SOURCE_DIR}/build/deps/SDL3-3.4.16/x86_64-w64-mingw32" CACHE PATH "SDL3 development files for gamepad support")
+     find_package(SDL3 CONFIG QUIET GLOBAL PATHS "${WP_SDL3_DIR}/lib/cmake/SDL3" NO_DEFAULT_PATH)
+ else()
+@@ -98,7 +115,9 @@ else()
+ endif()
+ if(SDL3_FOUND)
+     target_sources(wp_engine PRIVATE src/input/gamepad.cpp src/input/real_wiimote.cpp)
+-    if(TARGET SDL3::SDL3)
++    if(WP_AURORA)
++        target_link_libraries(wp_engine PUBLIC ${AURORA_SDL3_TARGET})
++    elseif(TARGET SDL3::SDL3)
+         target_link_libraries(wp_engine PUBLIC SDL3::SDL3)
+     else()
+         target_link_libraries(wp_engine PUBLIC SDL3::SDL3-static)
+@@ -106,7 +125,9 @@ if(SDL3_FOUND)
+ else()
+     target_sources(wp_engine PRIVATE src/input/no_gamepad.cpp src/input/no_real_wiimote.cpp)
+ endif()
+-if(NOT WIN32)
++if(WP_AURORA)
++    # renderer and window come from aurora (above)
++elseif(NOT WIN32)
+     if(SDL3_FOUND)
+         target_sources(wp_engine PRIVATE src/gpu/gx_render_gl.cpp src/platform/video_sdl.cpp src/platform/titlebar_sdl.cpp)
+         target_compile_definitions(wp_engine PRIVATE WP_SDL_PLATFORM)
+diff --git a/engine/include/wp/gx.h b/engine/include/wp/gx.h
+index f78b685..5820b52 100644
+--- a/engine/include/wp/gx.h
++++ b/engine/include/wp/gx.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <cstddef>
+ #include <cstdint>
+ #include <functional>
+ 
+@@ -16,5 +17,9 @@ void run_frame_task(std::function<void()> task);
+ // the external framebuffer since the last present, or the screen has not been refreshed for
+ // a few retraces (menus, overlays). Call on the GPU thread, in order with the drawing.
+ bool should_present();
++// Receives every GX byte the game sends, on the game's thread, before the engine parses it
++// (hmap-recomp engine patch 0013: used by the aurora video backend).
++using FifoTap = void (*)(const uint8_t* data, size_t size);
++void set_fifo_tap(FifoTap tap);
+ 
+ }
+diff --git a/engine/src/gpu/gx.cpp b/engine/src/gpu/gx.cpp
+index 5456ea5..fffe3d1 100644
+--- a/engine/src/gpu/gx.cpp
++++ b/engine/src/gpu/gx.cpp
+@@ -1680,6 +1680,12 @@ void enqueue(GpuItem item) {
+ 
+ }
+ 
++FifoTap g_fifo_tap = nullptr;
++
++void set_fifo_tap(FifoTap tap) {
++    g_fifo_tap = tap;
++}
++
+ void process() {
+     if (!g_cpu_clock_known.load()) {
+         g_cpu_clock = current_thread_clock();
+@@ -1688,6 +1694,9 @@ void process() {
+     if (g_fifo.empty()) {
+         return;
+     }
++    if (g_fifo_tap) {
++        g_fifo_tap(g_fifo.data(), g_fifo.size());
++    }
+     if (!g_threaded) {
+         size_t used = parse(g_fifo.data(), g_fifo.size(), false);
+         g_fifo.erase(g_fifo.begin(), g_fifo.begin() + static_cast<std::ptrdiff_t>(used));

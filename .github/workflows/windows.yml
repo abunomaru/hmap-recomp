@@ -1,0 +1,56 @@
+name: Windows build
+# Builds the engine on Windows with the same MSYS2 UCRT64 toolchain the README recommends, using
+# the synthetic test game (no Nintendo files). Two variants:
+#  - classic: MinGW GCC, Direct3D 11 renderer (what players build today)
+#  - aurora:  MSYS2 clang, aurora renderer (Dawn D3D12/Vulkan), the renderer being integrated
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [classic, aurora]
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-lld
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+      - name: Synthetic game (analyze + recompile)
+        run: |
+          sh tests/make_synthetic_game.sh
+          python hmap.py analyze --skip-dtk
+          python hmap.py recompile
+      - name: Build (classic)
+        if: matrix.variant == 'classic'
+        run: python hmap.py build --console
+      - name: Build (aurora)
+        if: matrix.variant == 'aurora'
+        run: python hmap.py build --aurora --console
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-logs-${{ matrix.variant }}
+          path: |
+            extern/wiiparty-recomp/build/out-hmap*/CMakeFiles/CMakeOutput.log
+            extern/wiiparty-recomp/build/out-hmap*/CMakeFiles/CMakeError.log
+            extern/wiiparty-recomp/build/out-hmap*/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: ignore
