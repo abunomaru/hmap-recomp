@@ -41,6 +41,15 @@ Rough order. Each phase ends with something you can check.
 - [ ] OpenGL (Linux/macOS) specialisation
 - [ ] GPU vertex transform (see RESEARCH.md), then frame interpolation
 
+## Phase 1c: aurora renderer (in progress)
+
+- [x] aurora (WiiCompiled fork, MIT) added as `extern/aurora`; builds on Linux with clang and its prebuilt Dawn
+- [x] GX → aurora FIFO bridge (`bridge/`): array bases, textures, palettes, EFB copies, display lists; unit tested
+- [ ] Engine integration behind a build option: aurora owns the window; VI retrace → aurora frames;
+      aurora draw-done → PE finish interrupt; input from aurora's SDL window
+- [ ] EFB copies the CPU reads (photo album) via aurora readback
+- [ ] Windows build (Dawn D3D12) tested on the reference laptop; then frame interpolation
+
 ## Phase 2: playable at 30 fps
 
 - [ ] New save, play through the first in-game day
