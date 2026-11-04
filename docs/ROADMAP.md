@@ -31,6 +31,16 @@ Rough order. Each phase ends with something you can check.
 - [ ] Frame rate: 6 fps in the opening cutscene. Profile with `hmap.py run --log`
       (CPU vs GPU thread load), then translate the DSP microcode ahead of time
 
+## Phase 1b: performance (Ryzen 5 5500U / Vega 7 reference)
+
+- [x] 0006 EFB copies: per-frame effects stay on the GPU (6 → 12 fps)
+- [x] 0010 present only new frames (presenting 90% → 0% of the GPU thread)
+- [x] 0011 vertex processing on several cores (light scenes ~30 fps)
+- [x] 0012 specialised TEV pixel shaders, compiled in the background (Direct3D 11)
+- [ ] Measure 0012 on the hay cutscene; disk cache for compiled variants
+- [ ] OpenGL (Linux/macOS) specialisation
+- [ ] GPU vertex transform (see RESEARCH.md), then frame interpolation
+
 ## Phase 2: playable at 30 fps
 
 - [ ] New save, play through the first in-game day

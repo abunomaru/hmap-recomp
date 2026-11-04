@@ -1,0 +1,389 @@
+diff --git a/engine/src/gpu/gx_render.cpp b/engine/src/gpu/gx_render.cpp
+index c3e909a..defea3f 100644
+--- a/engine/src/gpu/gx_render.cpp
++++ b/engine/src/gpu/gx_render.cpp
+@@ -8,6 +8,12 @@
+ #include <dxgi1_2.h>
+ 
+ #include <algorithm>
++#include <atomic>
++#include <condition_variable>
++#include <deque>
++#include <memory>
++#include <mutex>
++#include <thread>
+ #include <chrono>
+ #include <cmath>
+ #include <cstdio>
+@@ -184,6 +190,23 @@ cbuffer Constants : register(b0) {
+     float4 fog_range[3];
+ };
+ 
++// Shader specialisation (hmap-recomp engine patch 0012). The configuration part of the
++// constants (TEV stages, swap tables, indirect setup, alpha test, output mode, fog mode) is
++// read through the c* names below. In the general shader they are the constant buffer; a
++// specialised variant gets them as literals (prepended by the renderer), so loops unroll and
++// every switch, register index and texture choice is resolved at compile time.
++#ifdef SPECIALIZED
++#define TEV_LOOP [unroll]
++#else
++#define cstage stage
++#define cheader header
++#define cswaps swaps
++#define cindirect indirect
++#define ctevind tevind
++#define cfog_mode fog_integer.x
++#define TEV_LOOP [loop]
++#endif
++
+ Texture2D t0 : register(t0);
+ Texture2D t1 : register(t1);
+ Texture2D t2 : register(t2);
+@@ -377,7 +400,7 @@ int3 compare_color(uint mode, bool equal, int3 a, int3 b, int3 c) {
+ }
+ 
+ int4 apply_swap(int4 value, uint table) {
+-    uint packed = swaps[table];
++    uint packed = cswaps[table];
+     int components[4] = {value.r, value.g, value.b, value.a};
+     return int4(components[packed & 3], components[(packed >> 2) & 3], components[(packed >> 4) & 3], components[(packed >> 6) & 3]);
+ }
+@@ -418,21 +441,24 @@ PixelOutput pixel_main(PixelInput p) {
+     int4 r[4] = {quantized(initial[0]), quantized(initial[1]), quantized(initial[2]), quantized(initial[3])};
+     int4 c0 = quantized(p.c0);
+     int4 c1 = quantized(p.c1);
+-    uint count = header.x;
++    uint count = cheader.x;
+     if (count == 0) {
+         r[0] = c0;
+     }
+-    uint indirect_stages = indirect.x & 7;
+-    uint texgens = (indirect.x >> 8) & 15;
++    uint indirect_stages = cindirect.x & 7;
++    uint texgens = (cindirect.x >> 8) & 15;
+     int3 indirect_texel[4] = {int3(0, 0, 0), int3(0, 0, 0), int3(0, 0, 0), int3(0, 0, 0)};
+-    for (uint j = 0; j < indirect_stages && j < 4; j++) {
+-        uint reference = indirect.y >> (6 * j);
++    TEV_LOOP for (uint j = 0; j < 4; j++) {
++        if (j >= indirect_stages) {
++            break;
++        }
++        uint reference = cindirect.y >> (6 * j);
+         uint map = reference & 7;
+         uint coord = (reference >> 3) & 7;
+         if (coord >= texgens) {
+             coord = 0;
+         }
+-        uint scales = j < 2 ? indirect.z : indirect.w;
++        uint scales = j < 2 ? cindirect.z : cindirect.w;
+         uint shift_s = (scales >> ((j & 1) * 8)) & 15;
+         uint shift_t = (scales >> ((j & 1) * 8 + 4)) & 15;
+         int2 base = fixpoint(p, coord);
+@@ -440,16 +466,19 @@ PixelOutput pixel_main(PixelInput p) {
+     }
+     int2 tevcoord = int2(0, 0);
+     int alphabump = 0;
+-    for (uint i = 0; i < count; i++) {
+-        uint ce = stage[i].x;
+-        uint ae = stage[i].y;
+-        uint order = stage[i].z;
+-        uint ksel = stage[i].w;
++    TEV_LOOP for (uint i = 0; i < 16; i++) {
++        if (i >= count) {
++            break;
++        }
++        uint ce = cstage[i].x;
++        uint ae = cstage[i].y;
++        uint order = cstage[i].z;
++        uint ksel = cstage[i].w;
+         uint coord = (order >> 3) & 7;
+         if (coord >= texgens) {
+             coord = 0;
+         }
+-        uint ind = tevind[i].x;
++        uint ind = ctevind[i].x;
+         uint bt = ind & 3;
+         uint format = (ind >> 2) & 3;
+         uint bias = (ind >> 4) & 7;
+@@ -539,21 +568,21 @@ PixelOutput pixel_main(PixelInput p) {
+     }
+     int4 result = r[0];
+     if (count > 0) {
+-        uint last_color = (stage[count - 1].x >> 22) & 3;
+-        uint last_alpha = (stage[count - 1].y >> 22) & 3;
++        uint last_color = (cstage[count - 1].x >> 22) & 3;
++        uint last_alpha = (cstage[count - 1].y >> 22) & 3;
+         result = int4(r[last_color].rgb, r[last_alpha].a);
+     }
+     result &= 255;
+-    if ((header.w & 2) != 0) {
++    if ((cheader.w & 2) != 0) {
+         int2 dither = int2(p.position.xy) & 1;
+         result.rgb = (result.rgb - (result.rgb >> 6)) + (dither.x ^ dither.y) * 2 + dither.y;
+     }
+-    uint fog_select = uint(fog_integer.x) & 15;
++    uint fog_select = uint(cfog_mode) & 15;
+     uint fog_type = fog_select >> 1;
+     if (fog_type != 0) {
+         int z = clamp(int(p.position.z * 16777216.0), 0, 0xFFFFFF);
+         float ze = (fog_select & 1) == 0 ? (fog.x * 16777216.0) / float(fog_integer.y - (z >> fog_integer.w)) : fog.x * float(z) / 16777216.0;
+-        if ((fog_integer.x & 16) != 0) {
++        if ((cfog_mode & 16) != 0) {
+             float offset = (2.0 * (p.position.x / fog.w)) - 1.0 - fog.z;
+             float index = clamp(9.0 - abs(offset) * 9.0, 0.0, 9.0);
+             uint lower = uint(index);
+@@ -575,7 +604,7 @@ PixelOutput pixel_main(PixelInput p) {
+         int3 fog_color = int3((fog_integer.z >> 16) & 255, (fog_integer.z >> 8) & 255, fog_integer.z & 255);
+         result.rgb = (result.rgb * (256 - weight) + fog_color * weight) >> 8;
+     }
+-    uint compare = header.y;
++    uint compare = cheader.y;
+     uint value = (uint)result.a;
+     bool first = compare_alpha((compare >> 16) & 7, value, compare & 255);
+     bool second = compare_alpha((compare >> 19) & 7, value, (compare >> 8) & 255);
+@@ -586,15 +615,15 @@ PixelOutput pixel_main(PixelInput p) {
+     }
+     PixelOutput output;
+     output.blend = float4(result) / 255.0;
+-    uint source = (header.w >> 2) & 3;
++    uint source = (cheader.w >> 2) & 3;
+     int4 written = source == 0 ? result : (source == 1 ? int4(0, 0, 0, 0) : (source == 2 ? int4(255, 255, 255, 255) : 255 - result));
+     output.color = float4(written) / 255.0;
+-    if ((header.z & 0x100) != 0) {
+-        output.color.a = float(header.z & 255) / 255.0;
++    if ((cheader.z & 0x100) != 0) {
++        output.color.a = float(cheader.z & 255) / 255.0;
+     }
+-    if ((header.w & 1) != 0) {
++    if ((cheader.w & 1) != 0) {
+         output.color.rgb = float3(written.rgb >> 2) / 63.0;
+-        output.color.a = float(((header.z & 0x100) != 0 ? int(header.z & 255) : written.a) >> 2) / 63.0;
++        output.color.a = float(((cheader.z & 0x100) != 0 ? int(cheader.z & 255) : written.a) >> 2) / 63.0;
+     }
+     return output;
+ }
+@@ -1236,6 +1265,183 @@ ID3D11DepthStencilState* depth_for(uint32_t word) {
+     return state;
+ }
+ 
++// ---------------------------------------------------------------- specialised shaders
++// hmap-recomp engine patch 0012. Each distinct TEV configuration gets its own pixel shader
++// with the configuration compiled in (see the c* names in kShaderSource). Variants are
++// compiled on background threads; until one is ready its draws use the general shader, so
++// a new configuration never stalls a frame. Setting video.specialized_shaders (default on).
++
++struct ShaderKey {
++    uint32_t stage[kMaxStages][4];
++    uint32_t tevind[kMaxStages];
++    uint32_t header[4];
++    uint32_t swaps[4];
++    uint32_t indirect[4];
++    int32_t fog_mode;
++    uint32_t early;
++};
++
++ShaderKey make_shader_key(const Constants& constants, bool early) {
++    ShaderKey key;
++    std::memset(&key, 0, sizeof key);
++    uint32_t stages = std::min<uint32_t>(constants.header[0], kMaxStages);
++    for (uint32_t i = 0; i < stages; i++) {
++        std::memcpy(key.stage[i], constants.stage[i], sizeof key.stage[i]);
++        key.tevind[i] = constants.tevind[i][0];
++    }
++    std::memcpy(key.header, constants.header, sizeof key.header);
++    std::memcpy(key.swaps, constants.swaps, sizeof key.swaps);
++    std::memcpy(key.indirect, constants.indirect, sizeof key.indirect);
++    key.fog_mode = constants.fog_integer[0];
++    key.early = early ? 1u : 0u;
++    return key;
++}
++
++uint64_t hash_key(const ShaderKey& key) {
++    uint64_t value = 1469598103934665603ull;
++    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&key);
++    for (size_t i = 0; i < sizeof key; i++) {
++        value = (value ^ bytes[i]) * 1099511628211ull;
++    }
++    return value;
++}
++
++std::string specialized_source(const ShaderKey& key) {
++    std::string out = "#define SPECIALIZED\n";
++    char text[160];
++    auto vec = [&](const uint32_t* v) {
++        std::snprintf(text, sizeof text, "uint4(%uu, %uu, %uu, %uu)", v[0], v[1], v[2], v[3]);
++        return std::string(text);
++    };
++    out += "static const uint4 cstage[16] = {";
++    for (uint32_t i = 0; i < kMaxStages; i++) {
++        out += (i ? ", " : "") + vec(key.stage[i]);
++    }
++    out += "};\nstatic const uint4 ctevind[16] = {";
++    for (uint32_t i = 0; i < kMaxStages; i++) {
++        uint32_t row[4] = {key.tevind[i], 0, 0, 0};
++        out += (i ? ", " : "") + vec(row);
++    }
++    out += "};\nstatic const uint4 cheader = " + vec(key.header) + ";\n";
++    out += "static const uint4 cswaps = " + vec(key.swaps) + ";\n";
++    out += "static const uint4 cindirect = " + vec(key.indirect) + ";\n";
++    std::snprintf(text, sizeof text, "static const int cfog_mode = %d;\n", key.fog_mode);
++    out += text;
++    std::string body = kShaderSource;
++    if (key.early) {
++        body.replace(body.find("PixelOutput pixel_main("), 0, "[earlydepthstencil] ");
++    }
++    return out + body;
++}
++
++struct ShaderVariant {
++    ShaderKey key;
++    std::atomic<ID3D11PixelShader*> shader{nullptr};
++    std::atomic<bool> failed{false};
++};
++
++class VariantCompiler {
++public:
++    void enqueue(ShaderVariant* variant) {
++        start();
++        {
++            std::lock_guard<std::mutex> hold(m_lock);
++            m_queue.push_back(variant);
++        }
++        m_wake.notify_one();
++    }
++
++private:
++    void start() {
++        if (m_started) {
++            return;
++        }
++        m_started = true;
++        unsigned cores = std::max(1u, std::thread::hardware_concurrency());
++        unsigned threads = std::clamp(cores / 4, 1u, 2u);
++        for (unsigned i = 0; i < threads; i++) {
++            std::thread([this] { run(); }).detach();
++        }
++    }
++
++    void run() {
++        while (true) {
++            ShaderVariant* variant = nullptr;
++            {
++                std::unique_lock<std::mutex> hold(m_lock);
++                m_wake.wait(hold, [this] { return !m_queue.empty(); });
++                variant = m_queue.front();
++                m_queue.pop_front();
++            }
++            auto started = std::chrono::steady_clock::now();
++            std::string source = specialized_source(variant->key);
++            ID3DBlob* code = nullptr;
++            ID3DBlob* errors = nullptr;
++            HRESULT result = D3DCompile(source.data(), source.size(), "gx_variant", nullptr, nullptr, "pixel_main", "ps_5_0",
++                                        D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
++            ID3D11PixelShader* shader = nullptr;
++            if (SUCCEEDED(result) && code &&
++                SUCCEEDED(g_device.device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader))) {
++                variant->shader.store(shader, std::memory_order_release);
++            } else {
++                variant->failed.store(true, std::memory_order_release);
++                static std::atomic<int> reported{0};
++                if (reported++ < 3) {
++                    std::fprintf(stderr, "specialised shader failed to compile, using the general shader: %s\n",
++                                 errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no message");
++                }
++            }
++            release(code);
++            release(errors);
++            double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
++            uint32_t total = ++m_compiled;
++            if (total <= 5 || total % 50 == 0) {
++                log::write("shaders", "%u specialised shaders compiled (last took %.0f ms)", total, ms);
++            }
++        }
++    }
++
++    bool m_started = false;
++    std::mutex m_lock;
++    std::condition_variable m_wake;
++    std::deque<ShaderVariant*> m_queue;
++    std::atomic<uint32_t> m_compiled{0};
++};
++
++VariantCompiler g_variant_compiler;
++std::unordered_map<uint64_t, std::unique_ptr<ShaderVariant>> g_variants;
++constexpr size_t kMaxVariants = 4096;
++uint32_t g_special_batches = 0;
++uint32_t g_general_batches = 0;
++
++// Returns the specialised shader for this batch's configuration, or nullptr while it is
++// being compiled (or if specialisation is off / failed): the caller then uses the general one.
++ID3D11PixelShader* specialized_shader(const Constants& constants, bool early) {
++    static const settings::LiveFlag enabled("video.specialized_shaders", "WP_SPECIALIZED_SHADERS");
++    if (!enabled()) {
++        return nullptr;
++    }
++    ShaderKey key = make_shader_key(constants, early);
++    uint64_t hash = hash_key(key);
++    auto it = g_variants.find(hash);
++    if (it == g_variants.end()) {
++        if (g_variants.size() >= kMaxVariants) {
++            return nullptr;
++        }
++        auto variant = std::make_unique<ShaderVariant>();
++        variant->key = key;
++        ShaderVariant* raw = variant.get();
++        g_variants.emplace(hash, std::move(variant));
++        g_variant_compiler.enqueue(raw);
++        return nullptr;
++    }
++    ShaderVariant& variant = *it->second;
++    if (std::memcmp(&variant.key, &key, sizeof key) != 0) {
++        return nullptr;  // hash collision: stay on the general shader
++    }
++    return variant.shader.load(std::memory_order_acquire);
++}
++
+ void flush_pending() {
+     PendingBatch& pending = g_pending;
+     if (pending.vertices.empty()) {
+@@ -1279,7 +1485,14 @@ void flush_pending() {
+     context->IASetInputLayout(g_device.layout);
+     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+     context->VSSetShader(g_device.vertex_shader, nullptr, 0);
+-    context->PSSetShader(pending.early_depth ? g_device.early_pixel_shader : g_device.pixel_shader, nullptr, 0);
++    ID3D11PixelShader* pixel_shader = specialized_shader(pending.constants, pending.early_depth);
++    if (pixel_shader) {
++        g_special_batches++;
++    } else {
++        g_general_batches++;
++        pixel_shader = pending.early_depth ? g_device.early_pixel_shader : g_device.pixel_shader;
++    }
++    context->PSSetShader(pixel_shader, nullptr, 0);
+     context->PSSetConstantBuffers(0, 1, &g_device.constants);
+     size_t total = pending.vertices.size();
+     size_t offset = 0;
+@@ -1359,6 +1572,12 @@ void take_statistics(uint32_t& batches, uint32_t& vertices, double& seconds) {
+     batches = g_batches;
+     vertices = g_batch_vertices;
+     seconds = g_batch_seconds;
++    if (g_special_batches + g_general_batches > 0) {
++        log::write("shaders", "%u%% of batches drawn with specialised shaders, %u variants",
++                   g_special_batches * 100 / (g_special_batches + g_general_batches), static_cast<unsigned>(g_variants.size()));
++    }
++    g_special_batches = 0;
++    g_general_batches = 0;
+     g_batches = 0;
+     g_batch_vertices = 0;
+     g_batch_seconds = 0.0;
+diff --git a/engine/src/platform/settings.cpp b/engine/src/platform/settings.cpp
+index 1179e37..f713cee 100644
+--- a/engine/src/platform/settings.cpp
++++ b/engine/src/platform/settings.cpp
+@@ -26,6 +26,7 @@ const Option kBaseOptions[] = {
+     {"video.fullscreen", "0"},
+     {"video.copy_filter", "1"},
+     {"video.efb_to_ram", "2"},
++    {"video.specialized_shaders", "1"},
+     {"video.dump_textures", "0"},
+     {"video.custom_textures", "1"},
+     {"input.gamepads", "1"},

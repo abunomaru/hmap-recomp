@@ -93,6 +93,7 @@ Keys can be rebound in the same file.
 |---|---|---|
 | `video.scale` | 1–6 | internal resolution multiplier (1 = Wii's 640×480) |
 | `video.efb_to_ram` | 2 auto (default), 1 always, 0 never | how GPU-rendered copies reach game memory. `1` is exact but slow in this game (it renders ~20 copies per frame); `0` is fastest but may break photo-album thumbnails, as in Dolphin |
+| `video.specialized_shaders` | 1 (default) / 0 | a shader compiled for each TEV setup the game uses (Direct3D 11), built in the background; 0 = always the general shader |
 | `video.vertex_threads` | 0 auto (default), 1 off, N | CPU threads for vertex processing (the engine transforms and lights vertices on the CPU; auto = cores − 2, max 8). Set 1 if geometry looks wrong |
 | `input.nunchuk` | 1 / 0 | Nunchuk plugged in |
 | `system.fast_forward` | 2–16 (default 4) | speed while holding the fast-forward key (Tab). Speeds up the game clock and screen refresh; parts limited by audio or disc timing speed up less |

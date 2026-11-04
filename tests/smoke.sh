@@ -32,3 +32,4 @@ python3 hmap.py analyze --skip-dtk
 python3 hmap.py recompile
 python3 hmap.py build --headless
 sh tests/engine/run.sh
+sh tests/shaders/validate.sh
