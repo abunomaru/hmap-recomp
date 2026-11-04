@@ -26,6 +26,7 @@ def special(stages, tevind, header, swaps, indirect, fog_mode, is_early):
     out += "static const uint4 ctevind[16] = {" + ", ".join(vec([tevind[i] if i < len(tevind) else 0, 0, 0, 0]) for i in range(16)) + "};\n"
     out += f"static const uint4 cheader = {vec(header)};\nstatic const uint4 cswaps = {vec(swaps)};\nstatic const uint4 cindirect = {vec(indirect)};\n"
     out += f"static const int cfog_mode = {fog_mode};\n"
+    out += f"#define TEV_STAGE_LIMIT {max(1, min(header[0], 16))}\n#define IND_STAGE_LIMIT {min(indirect[0] & 7, 4)}\n"
     return out + (early(body) if is_early else body)
 
 
