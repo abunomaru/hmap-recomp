@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -147,11 +148,15 @@ def link_game() -> str:
     if ENGINE_GAME.is_symlink():
         return "symlink"
     if not ENGINE_GAME.exists():
-        try:
-            ENGINE_GAME.symlink_to(os.path.relpath(REPO_GAME, ENGINE_GAME.parent), target_is_directory=True)
-            return "symlink"
-        except OSError:
-            ENGINE_GAME.mkdir(parents=True)
+        # Windows: always a synced copy. Symlinks need developer mode, and MSYS2's Python writes
+        # targets with forward slashes that Windows then cannot follow.
+        if os.name != "nt" and not sys.platform.startswith(("win", "msys", "cygwin")):
+            try:
+                ENGINE_GAME.symlink_to(os.path.relpath(REPO_GAME, ENGINE_GAME.parent), target_is_directory=True)
+                return "symlink"
+            except OSError:
+                pass
+        ENGINE_GAME.mkdir(parents=True)
     sync_game()
     return "copy"
 
