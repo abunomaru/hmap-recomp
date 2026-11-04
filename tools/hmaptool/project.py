@@ -261,6 +261,25 @@ def set_ini_values(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(out).strip("\n") + "\n", encoding="utf-8")
 
 
+# Settings this project adds (shown in settings.ini so they can be found); never overwritten.
+EXTRA_SETTINGS = {
+    "video.interpolation": "0",  # 0 off, 120/180/240: aurora frame interpolation (aurora renderer only)
+}
+
+
+def ensure_extra_settings() -> None:
+    path = settings_file()
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    missing = {}
+    for key, value in EXTRA_SETTINGS.items():
+        section, name = key.split(".", 1)
+        block = existing.split(f"[{section}]", 1)
+        if len(block) < 2 or f"\n{name}=" not in "\n" + block[1].split("\n[", 1)[0]:
+            missing[key] = value
+    if missing:
+        set_ini_values(path, missing)
+
+
 def apply_game_defaults() -> bool:
     marker = WORK / f"settings-defaults-v{GAME_DEFAULTS_VERSION}"
     if marker.exists():

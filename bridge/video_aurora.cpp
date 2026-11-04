@@ -13,7 +13,10 @@
 #include <SDL3/SDL.h>
 #include <aurora/aurora.h>
 #include <aurora/event.h>
+#include <aurora/gfx.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -23,6 +26,7 @@
 #include "wp/gx.h"
 #include "wp/log.h"
 #include "wp/memory.h"
+#include "wp/settings.h"
 
 namespace aurora::gx::fifo {
 void write_data_grow(const void* data, uint32_t length);
@@ -120,6 +124,8 @@ void start() {
     config.appName = game::description().title;
     config.logCallback = &log_callback;
     config.vsync = false;
+    // Software GPUs (llvmpipe/lavapipe) are refused unless asked for: used by tests and CI.
+    config.allowCpuAdapter = std::getenv("WP_ALLOW_CPU_GPU") != nullptr;
     static char program[] = "hmap";
     static char* argv[] = {program, nullptr};
     AuroraInfo info = aurora_initialize(1, argv, &config);
@@ -130,12 +136,45 @@ void start() {
     g_in_frame = aurora_begin_frame();
 }
 
+// Called on every VI retrace. An aurora frame is closed only when the game showed a new image
+// (an EFB copy to the external framebuffer) - 30 per second in this game - so each aurora frame
+// is one game frame, which is what frame interpolation needs. Events are pumped every retrace.
 void present() {
+    using Clock = std::chrono::steady_clock;
+    static uint64_t shown = 0;
+    static Clock::time_point last_frame = Clock::now();
+    static int retraces_without_image = 0;
     gx::process();  // flushes pending GX bytes through the tap into this frame
+    pump_events();
+    uint64_t copies = g_bridge ? g_bridge->stats().display_copies : 0;
+    bool new_image = copies != shown;
+    // Screens that never copy to the display (loading) still need frames to be closed.
+    if (!new_image && ++retraces_without_image < 4) {
+        return;
+    }
+    retraces_without_image = 0;
+    shown = copies;
+
+    static const settings::LiveNumber interpolation("video.interpolation", "WP_INTERPOLATION");
+    int target = interpolation();
+    static int applied = -1;
+    if (target != applied) {
+        aurora_set_frame_interpolation_fps(static_cast<uint32_t>(target));
+        applied = target;
+        log::write("video", "frame interpolation %s", target ? "on" : "off");
+    }
+    Clock::time_point now = Clock::now();
+    uint64_t interval = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now - last_frame).count());
+    interval = std::clamp<uint64_t>(interval, 16'666'667ull, 50'000'000ull);
+    last_frame = now;
+    if (target) {
+        uint64_t now_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+        aurora_set_present_schedule(now_ns + interval, interval);
+        aurora_report_producer_paced(true);
+    }
     if (g_in_frame) {
         aurora_end_frame();
     }
-    pump_events();
     g_in_frame = aurora_begin_frame();
 }
 

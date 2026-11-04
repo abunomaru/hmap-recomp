@@ -121,6 +121,7 @@ int main() {
         Stream want;
         want.bp(0x49, 0).bp(0x4A, 639 | (527 << 10)).aurora(kLoadCopySrc).u32(0).u32(0).u32(640).u32(528).bp(0x52, copy);
         expect(out == want.bytes, "display copy -> COPY_SRC only, then 0x52");
+        expect(bridge.stats().display_copies == 1, "display copy counted");
     }
     {
         Bridge bridge(memory);

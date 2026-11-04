@@ -360,6 +360,7 @@ def cmd_run(args) -> int:
     exe = project.executable(getattr(args, "aurora", None))
     if not exe.exists():
         raise SystemExit("not built yet - run `hmap.py build`")
+    project.ensure_extra_settings()
     if project.apply_game_defaults():
         print("game defaults applied to settings.ini: " + ", ".join(f"{k}={v}" for k, v in project.GAME_DEFAULTS.items()))
     if args.scale:

@@ -164,7 +164,9 @@ void Bridge::on_bp(uint32_t word, std::vector<uint8_t>& out) {
         put32(out, uint32_t(width));
         put32(out, uint32_t(height));
         bool to_display = (value >> 14) & 1;
-        if (!to_display) {
+        if (to_display) {
+            m_stats.display_copies++;
+        } else {
             bool half = (value >> 9) & 1;
             bool depth = (m_bp[0x43] & 7) == 3;
             aurora(out, kLoadCopyDst);

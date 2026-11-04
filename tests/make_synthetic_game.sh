@@ -22,6 +22,9 @@ boot = bytearray(0x440)
 boot[0:6] = b"RBIEE9"
 boot[0x18:0x1C] = struct.pack(">I", disc.WII_MAGIC)
 (root / "sys" / "boot.bin").write_bytes(bytes(boot))
+(root / "sys" / "bi2.bin").write_bytes(bytes(0x2000))
+# file system table with only the root directory (one entry, flags 1 = directory) + empty name table
+(root / "sys" / "fst.bin").write_bytes(struct.pack(">BBHII", 1, 0, 0, 0, 1) + b"\0")
 project.original_dol().unlink(missing_ok=True)
 print(f"synthetic game written to {root}")
 PY

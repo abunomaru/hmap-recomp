@@ -52,6 +52,7 @@ public:
         uint64_t display_lists = 0;
         uint64_t rewritten = 0;  // memory references converted to pointers
         uint64_t unknown = 0;    // bytes skipped as unknown opcodes
+        uint64_t display_copies = 0;  // EFB -> external framebuffer copies (new images shown)
     };
     const Stats& stats() const { return m_stats; }
 

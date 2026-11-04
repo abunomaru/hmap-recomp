@@ -18,3 +18,38 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Synthetic end-to-end smoke test
         run: sh tests/smoke.sh
+
+  aurora-linux:
+    # Builds the aurora renderer variant and starts it under a virtual display with Mesa's
+    # software Vulkan (synthetic test game, no Nintendo files): aurora must initialise and run.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tools and SDL3/Vulkan dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y ninja-build clang lld xvfb mesa-vulkan-drivers
+          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev
+          libwayland-dev wayland-protocols libdecor-0-dev libegl-dev libgl-dev libpulse-dev libasound2-dev
+          libudev-dev libdbus-1-dev libvulkan-dev
+      - name: Synthetic game
+        run: |
+          sh tests/make_synthetic_game.sh
+          python hmap.py analyze --skip-dtk
+          python hmap.py recompile
+      - name: Build with aurora
+        run: python hmap.py build --aurora
+      - name: Start under Xvfb (software Vulkan) for 20 seconds
+        run: |
+          cd extern/wiiparty-recomp
+          set +e
+          WP_ALLOW_CPU_GPU=1 XDG_RUNTIME_DIR=/tmp WP_LOG_FILE=$PWD/aurora-run.log timeout 20 xvfb-run -a -s "-screen 0 1280x720x24" ./build/out-hmap-aurora/hmap games/hmap/extracted
+          status=$?
+          set -e
+          cat aurora-run.log | grep -E "aurora|video" | head -30
+          test $status -eq 124 || { echo "exited early with $status"; exit 1; }
+          grep -q "build .* on aurora" aurora-run.log
