@@ -354,7 +354,9 @@ def cmd_run(args) -> int:
         raise SystemExit("not built yet - run `hmap.py build`")
     env = dict(os.environ)
     if args.log:
-        env["WP_LOG_FILE"] = str(Path(args.log).resolve())
+        log_file = Path(args.log).resolve()
+        log_file.unlink(missing_ok=True)  # the engine appends (patch 0005); start each run fresh
+        env["WP_LOG_FILE"] = str(log_file)
         print(f"engine log: {env['WP_LOG_FILE']} (CPU/GPU thread load once per second)")
     if args.dump_dsp:
         Path(args.dump_dsp).mkdir(parents=True, exist_ok=True)

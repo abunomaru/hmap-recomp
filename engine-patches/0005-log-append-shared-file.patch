@@ -1,0 +1,14 @@
+diff --git a/engine/src/core/log.cpp b/engine/src/core/log.cpp
+index c3ea797..c687e23 100644
+--- a/engine/src/core/log.cpp
++++ b/engine/src/core/log.cpp
+@@ -19,7 +19,8 @@ struct LogFile {
+ 
+     LogFile() {
+         if (const char* path = std::getenv("WP_LOG_FILE")) {
+-            file = std::fopen(path, "w");
++            // Append, like the stderr redirect in main.cpp: both handles share the file (hmap-recomp patch 0005).
++            file = std::fopen(path, "a");
+         }
+     }
+ };
