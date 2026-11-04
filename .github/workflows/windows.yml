@@ -33,6 +33,7 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-abseil-cpp
       - name: Synthetic game (analyze + recompile)
         run: |
           sh tests/make_synthetic_game.sh
