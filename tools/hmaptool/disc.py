@@ -23,6 +23,8 @@ KNOWN_RELEASES = {
     "RBIEE9": Release("RBIEE9", "NTSC-U", "Harvest Moon: Animal Parade", "60 Hz"),
     "RBIP99": Release("RBIP99", "PAL", "Harvest Moon: Animal Parade", "50 Hz (60 Hz optional)"),
     "RBIJ99": Release("RBIJ99", "NTSC-J", "Bokujou Monogatari: Waku Waku Animal March", "60 Hz"),
+    # Fan patch "Harvest Moon: Pride Parade" (frogglegged) re-IDs the NTSC-U disc; same code.
+    "CBIEE9": Release("CBIEE9", "NTSC-U + Pride Parade", "Harvest Moon: Animal Parade (Pride Parade)", "60 Hz"),
 }
 
 

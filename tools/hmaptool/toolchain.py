@@ -48,6 +48,16 @@ TOOLS = {
             "windows-arm64.exe": "6d2567f6017f6add6e493f86feb3c4fd7064a17ca7f972f36f29aa3af3488871",
         },
     },
+    "xdelta3": {
+        # Windows: the official 3.0.11 build (zip). Linux/macOS: the system package (apt/brew).
+        "version": "v3.0.11",
+        "url": "https://github.com/jmacd/xdelta-gpl/releases/download/{version}/xdelta3-3.0.11-x86_64.exe.zip",
+        "env": "HMAP_XDELTA3",
+        "zip_member": "xdelta3-3.0.11-x86_64.exe",
+        "sha256": {
+            "windows-x86_64.exe": "eca90daab9cd8388ffa17fb4d6808bb0616cc5d37a7682126485dba1c79f86bf",
+        },
+    },
 }
 
 
@@ -94,8 +104,10 @@ def install(name: str, force: bool = False) -> Path:
     plat = host_platform()
     expected = spec["sha256"].get(plat)
     if expected is None:
-        raise RuntimeError(f"no pinned {name} build for {plat}; build it yourself and set {spec['env']}")
-    if target.exists() and not force and sha256(target) == expected:
+        hint = " (install it with your package manager, e.g. apt install xdelta3)" if name == "xdelta3" else ""
+        raise RuntimeError(f"no pinned {name} build for {plat}{hint}; or set {spec['env']}")
+    marker = target.with_suffix(target.suffix + ".sha256")
+    if target.exists() and not force and (sha256(target) == expected or (marker.exists() and marker.read_text().strip() == expected)):
         return target
     url = spec["url"].format(version=spec["version"], platform=plat)
     BIN.mkdir(parents=True, exist_ok=True)
@@ -107,8 +119,15 @@ def install(name: str, force: bool = False) -> Path:
     if actual != expected:
         partial.unlink()
         raise RuntimeError(f"{name}: checksum mismatch (got {actual}, expected {expected})")
-    partial.replace(target)
+    if spec.get("zip_member"):
+        import zipfile
+        with zipfile.ZipFile(partial) as archive:
+            target.write_bytes(archive.read(spec["zip_member"]))
+        partial.unlink()
+    else:
+        partial.replace(target)
     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    marker.write_text(expected + "\n")
     return target
 
 

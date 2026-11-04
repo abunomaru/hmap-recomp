@@ -1,8 +1,8 @@
 diff --git a/engine/CMakeLists.txt b/engine/CMakeLists.txt
-index 62b0d28..fcdd8b2 100644
+index 62b0d28..2ce76fc 100644
 --- a/engine/CMakeLists.txt
 +++ b/engine/CMakeLists.txt
-@@ -41,7 +41,22 @@ add_library(wp_engine STATIC
+@@ -41,7 +41,23 @@ add_library(wp_engine STATIC
      src/platform/mii.cpp
      src/platform/options_window.cpp
  )
@@ -20,13 +20,14 @@ index 62b0d28..fcdd8b2 100644
 +    add_subdirectory("${WP_AURORA_DIR}" "${CMAKE_BINARY_DIR}/aurora" EXCLUDE_FROM_ALL)
 +    target_sources(wp_engine PRIVATE "${WP_BRIDGE_DIR}/aurora_bridge.cpp" "${WP_BRIDGE_DIR}/video_aurora.cpp" src/gpu/null_render.cpp)
 +    target_include_directories(wp_engine PRIVATE "${WP_BRIDGE_DIR}")
-+    target_link_libraries(wp_engine PUBLIC aurora::core aurora::gx)
++    # aurora's core, GX and VI libraries reference each other: let the linker rescan them.
++    target_link_libraries(wp_engine PUBLIC "$<LINK_GROUP:RESCAN,aurora_core,aurora_gx,aurora_vi>")
 +    target_compile_definitions(wp_engine PRIVATE WP_AURORA)
 +elseif(WIN32)
      target_sources(wp_engine PRIVATE src/gpu/gx_render.cpp src/platform/video.cpp)
  endif()
  target_sources(wp_engine PRIVATE src/platform/options_render_stb.cpp)
-@@ -63,7 +78,9 @@ if(WP_TRACE_CALLS)
+@@ -63,7 +79,9 @@ if(WP_TRACE_CALLS)
  endif()
  target_compile_options(wp_engine PRIVATE -Wall -Wextra)
  
@@ -37,7 +38,7 @@ index 62b0d28..fcdd8b2 100644
      set(WP_SDL3_DIR "${CMAKE_SOURCE_DIR}/build/deps/SDL3-3.4.16/x86_64-w64-mingw32" CACHE PATH "SDL3 development files for gamepad support")
      find_package(SDL3 CONFIG QUIET GLOBAL PATHS "${WP_SDL3_DIR}/lib/cmake/SDL3" NO_DEFAULT_PATH)
  else()
-@@ -98,7 +115,9 @@ else()
+@@ -98,7 +116,9 @@ else()
  endif()
  if(SDL3_FOUND)
      target_sources(wp_engine PRIVATE src/input/gamepad.cpp src/input/real_wiimote.cpp)
@@ -48,7 +49,7 @@ index 62b0d28..fcdd8b2 100644
          target_link_libraries(wp_engine PUBLIC SDL3::SDL3)
      else()
          target_link_libraries(wp_engine PUBLIC SDL3::SDL3-static)
-@@ -106,7 +125,9 @@ if(SDL3_FOUND)
+@@ -106,7 +126,9 @@ if(SDL3_FOUND)
  else()
      target_sources(wp_engine PRIVATE src/input/no_gamepad.cpp src/input/no_real_wiimote.cpp)
  endif()
