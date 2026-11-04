@@ -1,0 +1,159 @@
+diff --git a/engine/src/core/interrupts.cpp b/engine/src/core/interrupts.cpp
+index b5b7477..7c0f1d1 100644
+--- a/engine/src/core/interrupts.cpp
++++ b/engine/src/core/interrupts.cpp
+@@ -56,11 +56,27 @@ uint32_t g_cause_counts[kCauseCount] = {};
+ double g_cause_wait_ms[kCauseCount] = {};
+ uint32_t g_cause_wakes[kCauseCount] = {};
+ 
++Clock::time_point g_idle_since = Clock::now();
++
+ void note_cause(int cause) {
+     g_last_cause = cause;
+     g_cause_counts[cause]++;
+ }
+ 
++// Deliver one interrupt and credit the wake-up to it if it ended the guest's idle state
++// (patch 0009: precise attribution instead of "last interrupt before the next poll").
++template <typename Deliver>
++void deliver_counted(int cause, Deliver deliver) {
++    bool was_idle = rd32(kCurrentThread) == 0;
++    note_cause(cause);
++    deliver();
++    if (was_idle && rd32(kCurrentThread) != 0) {
++        g_cause_wakes[cause]++;
++        g_cause_wait_ms[cause] += std::chrono::duration<double, std::milli>(Clock::now() - g_idle_since).count();
++        g_idle_since = Clock::now();
++    }
++}
++
+ void log_waits(Clock::time_point now) {
+     static Clock::time_point last = now;
+     double seconds = std::chrono::duration<double>(now - last).count();
+@@ -209,36 +225,30 @@ void poll_interrupts(Cpu& c) {
+         return;
+     }
+     if (decrementer_due()) {
+-        note_cause(kCauseDecrementer);
+-        deliver_decrementer(c);
++        deliver_counted(kCauseDecrementer, [&] { deliver_decrementer(c); });
+     }
+     if (ipc::interrupt_pending()) {
+-        note_cause(kCauseIpc);
+-        deliver_external_interrupt(c, ipc::kInterrupt);
++        deliver_counted(kCauseIpc, [&] { deliver_external_interrupt(c, ipc::kInterrupt); });
+     }
+     for (int delivered = 0; delivered < 3; delivered++) {
+         uint32_t index = dsp::pending_interrupt();
+         if (index == 0) {
+             break;
+         }
+-        note_cause(kCauseDsp);
+-        deliver_external_interrupt(c, index);
++        deliver_counted(kCauseDsp, [&] { deliver_external_interrupt(c, index); });
+     }
+     if (gx::take_finish_interrupt()) {
+-        note_cause(kCauseFinish);
+-        deliver_external_interrupt(c, kFinishInterrupt);
++        deliver_counted(kCauseFinish, [&] { deliver_external_interrupt(c, kFinishInterrupt); });
+     }
+     for (int delivered = 0; delivered < 3; delivered++) {
+         uint32_t index = exi::pending_interrupt();
+         if (index == 0) {
+             break;
+         }
+-        note_cause(kCauseExi);
+-        deliver_external_interrupt(c, index);
++        deliver_counted(kCauseExi, [&] { deliver_external_interrupt(c, index); });
+     }
+     if (si::interrupt_pending()) {
+-        note_cause(kCauseSerial);
+-        deliver_external_interrupt(c, kSerialInterrupt);
++        deliver_counted(kCauseSerial, [&] { deliver_external_interrupt(c, kSerialInterrupt); });
+     }
+     gx::process();
+     Clock::time_point now = Clock::now();
+@@ -248,12 +258,8 @@ void poll_interrupts(Cpu& c) {
+     if (idle && previous_idle) {
+         g_idle_nanoseconds += std::chrono::duration_cast<std::chrono::nanoseconds>(now - previous_poll).count();
+     }
+-    static Clock::time_point idle_since = now;
+     if (idle && !previous_idle) {
+-        idle_since = now;
+-    } else if (!idle && previous_idle && g_last_cause >= 0) {
+-        g_cause_wakes[g_last_cause]++;
+-        g_cause_wait_ms[g_last_cause] += std::chrono::duration<double, std::milli>(now - idle_since).count();
++        g_idle_since = now;
+     }
+     previous_poll = now;
+     previous_idle = idle;
+@@ -267,8 +273,7 @@ void poll_interrupts(Cpu& c) {
+         g_next_retrace = now + period;
+     }
+     si::poll();
+-    note_cause(kCauseVideo);
+-    deliver_video_interrupt(c);
++    deliver_counted(kCauseVideo, [&] { deliver_video_interrupt(c); });
+ }
+ 
+ }
+diff --git a/engine/src/gpu/gx.cpp b/engine/src/gpu/gx.cpp
+index d40b8c1..9c2793a 100644
+--- a/engine/src/gpu/gx.cpp
++++ b/engine/src/gpu/gx.cpp
+@@ -724,6 +724,12 @@ void emit_triangle(std::vector<ScreenVertex>& out, const Prepared& a, const Prep
+ uint32_t g_indirect_draws = 0;
+ uint32_t g_coordinate_draws = 0;
+ std::atomic<uint32_t> g_skipped_presents{0};
++// Wall-clock time the GPU thread spends working on items (including time blocked inside the
++// graphics driver), the part of it spent presenting, and the time the CPU thread is blocked
++// because the GPU queue is full (hmap-recomp engine patch 0009).
++std::atomic<int64_t> g_gpu_work_ns{0};
++std::atomic<int64_t> g_gpu_present_ns{0};
++std::atomic<int64_t> g_cpu_blocked_ns{0};
+ #ifdef _WIN32
+ using ThreadClock = HANDLE;
+ 
+@@ -1114,6 +1120,8 @@ void execute_copy(uint32_t value) {
+                 static const ThreadClock gpu_clock = current_thread_clock();
+                 double gpu = thread_seconds(gpu_clock);
+                 log::write("copies", "%u EFB copies written back to RAM, %.1f ms waiting for the GPU", write_backs, write_back_seconds * 1000.0);
++                log::write("gpu", "GPU thread working %.0f%% of real time (presenting %.0f%%), CPU thread blocked on a full GPU queue %.0f%%",
++                           g_gpu_work_ns.exchange(0) / 1e7 / seconds, g_gpu_present_ns.exchange(0) / 1e7 / seconds, g_cpu_blocked_ns.exchange(0) / 1e7 / seconds);
+                 log::write("memory", "%zu MB private memory, %zu KB of graphics commands queued", private_memory_mb(), g_queued_bytes.load() >> 10);
+                 double idle = idle_share();
+                 if (idle >= 0.0) {
+@@ -1492,14 +1500,20 @@ void gpu_thread() {
+         g_queued_bytes -= item.bytes.size();
+         hold.unlock();
+         g_gpu.space.notify_all();
++        auto work_start = std::chrono::steady_clock::now();
+         if (!item.bytes.empty()) {
+             buffer.insert(buffer.end(), item.bytes.begin(), item.bytes.end());
+             size_t used = parse(buffer.data(), buffer.size(), false);
+             buffer.erase(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(used));
+         }
+         if (item.task) {
++            auto task_start = std::chrono::steady_clock::now();
+             item.task();
++            if (item.frame) {
++                g_gpu_present_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - task_start).count();
++            }
+         }
++        g_gpu_work_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - work_start).count();
+         if (item.frame) {
+             std::lock_guard<std::mutex> hold(g_gpu.lock);
+             g_gpu.frames--;
+@@ -1521,7 +1535,11 @@ void enqueue(GpuItem item) {
+         }
+         g_gpu.frames++;
+     }
+-    g_gpu.space.wait(hold, [] { return g_queued_bytes.load() < kMaxQueuedBytes; });
++    if (g_queued_bytes.load() >= kMaxQueuedBytes) {
++        auto blocked_start = std::chrono::steady_clock::now();
++        g_gpu.space.wait(hold, [] { return g_queued_bytes.load() < kMaxQueuedBytes; });
++        g_cpu_blocked_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - blocked_start).count();
++    }
+     g_queued_bytes += item.bytes.size();
+     g_gpu.items.push_back(std::move(item));
+     hold.unlock();
