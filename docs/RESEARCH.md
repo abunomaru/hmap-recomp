@@ -63,3 +63,57 @@ memory, so integrated Radeons suffer most.
    vertex shader generated per vertex setup. Keep the CPU path as a fallback.
 3. **Frame interpolation for 60 fps**, following WiiCompiled: draw identity hashing,
    matrix pairing, in-between frames at the retrace that the 30 fps game does not use.
+
+## Survey: every Wii / GameCube recomp worth reusing (November 2026)
+
+### Wii ports built on WiiCompiled + aurora (the most successful family)
+
+| Port | Game | State | Notable |
+|---|---|---|---|
+| [WiiCompiled](https://github.com/patchzyy/wiicompiled) | Mario Kart Wii | beta, playable | the base: translator (C#), SDK-level HLE runtime, aurora renderer, launcher, frame interpolation, Retro Rewind mods |
+| [NewSuperPaperBros](https://github.com/josiahg2502-glitch/NewSuperPaperBros) | Super Paper Mario (2007) | released | up to 4K, 16:9 / 2.39:1, **interpolation to 120/180/240 fps**, HD texture + HQ music mods, drop-in mod folders, controller prompts, Windows/Linux/macOS/Android/libretro |
+| [NSMB Wii](https://github.com/witherblitz/nsmb-wii-multiplayer-recompilation) | New Super Mario Bros. Wii | 0.3.1, plays | runtime "retargeted from Mario Kart Wii", online LAN play, Android; the author says it was written with an AI model |
+| [BrawlRecompiled](https://github.com/josiahg2502-glitch/BrawlRecompiled) | Smash Bros. Brawl | WIP | SD mods run in a built-in PowerPC interpreter |
+| [ResortCompiled](https://github.com/redluigi323/ResortCompiled) | Wii Sports Resort | not booting yet | SDK names carried over by **function matching against Mario Kart Wii**; 570 of 750 runtime hook addresses re-keyed |
+
+How they port a game: a `projects/<game>/` folder (translator config, function map from a decomp
+or community symbols), plus retargeting the runtime's Mario Kart Wii-specific hooks. The runtime
+replaces Nintendo SDK functions (GX, OS, DVD, AX, WPAD...) by name, so every game needs those
+functions located. Super Paper Mario and NSMBW had community symbol maps; Animal Parade has none,
+so Dolphin's signature database or function matching would have to supply them.
+
+### Other Wii / GameCube projects
+
+| Project | Approach | Use to us |
+|---|---|---|
+| [Wii Party Recomp](https://github.com/arelkair/wiiparty-recomp) (our engine) | hardware-level emulation below the SDK | already boots and plays Animal Parade |
+| [wii-recomp](https://github.com/Zontex/wii-recomp) | hardware level, Vulkan, specialised shaders | shader/vertex design reference; no Windows yet |
+| [NWiiRecomp](https://github.com/BlackLineInteractive/NWiiRecomp) | HLE + own OpenGL rasterizer, TOML game profiles | early (Mario Party 7 intro) |
+| [ModernGekko](https://github.com/ant0-blase/MOHFrontline-GC-RECOMP) + DolRecomp | GameCube runtime | GameCube only |
+| GameCube ports: [Skies of Arcadia](https://github.com/ogdanimal/SkiesOfArcadiaLegends-Recomp), [Wind Waker](https://github.com/sp00nznet/ww), [Ring Out](https://github.com/jackpoison-prog/RingOut), [Metroid Prime](https://github.com/Odrannnn/MetroidPrimePort), Dusklight (Twilight Princess decomp + aurora) | various | feature ideas |
+| [RecompHub](https://github.com/junkx420/RecompHub) | Windows store for community recomps | distribution later |
+
+### Quality-of-life ideas from the Harvest Moon family
+
+[HMBTN-ReFarmed](https://github.com/d4rksp4rt4n/HMBTN-ReFarmed) (Harvest Moon: Back to Nature, PS1)
+shows what players of this series want: text speed (1-16 characters at once), quick menus and
+fades, cutscenes at full speed while a button is held, shortened loading, an auto-save slot, an
+"empty bag" fix for tool switching, fast-forward on Tab, texture dumping/packs, 60 fps camera via
+in-between frames, a launcher that builds from your disc and updates itself. Most of these are
+game-code patches (`patches/`), independent of which engine we use.
+
+### Options
+
+| | A: stay on Wii Party engine | B: move to WiiCompiled | C: Wii Party engine + aurora renderer |
+|---|---|---|---|
+| Works today | yes | no: start over | yes, at every step |
+| Renderer | D3D11 ubershader, CPU vertices (being improved) | aurora: D3D12/Vulkan/Metal, per-setup shaders, GPU vertices | aurora |
+| 60+ fps interpolation | to write | included | included (aurora fork) |
+| Per-game work | small (done) | locate ~all SDK functions, retarget MKW hooks | a FIFO bridge: convert array, texture, display-list and copy addresses to aurora's pointer commands |
+| Platforms | Windows, Linux | Windows, Linux, macOS, Android | Windows, Linux (+ more later) |
+| Main risk | we rebuild what aurora already has | SDK HLE mismatches (Animal Parade's SDK differs from MKW's) | integrating Dawn and aurora's frame loop with our engine's video thread |
+
+Recommendation: **C**, keeping A's game-specific work. Our engine already runs the game, and
+aurora is exactly the renderer we were about to rebuild. Reuse the Wii Party launcher (already in
+the engine submodule) for "build from your disc" and updates, and add the Harvest Moon QOL patches
+as they are found.
