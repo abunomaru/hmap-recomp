@@ -502,6 +502,49 @@ def cmd_export_save(args) -> int:
     return 0
 
 
+def cmd_report(args) -> int:
+    """Collects diagnostics (no game data, no saves) into report.zip to send to a developer."""
+    import subprocess
+    import zipfile
+
+    out = project.ROOT / "report.zip"
+    hmap = project.ROOT / "hmap.py"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        for command in (["doctor"], ["info"], ["fps-scan"]):
+            print(f"running hmap.py {' '.join(command)} ...")
+            try:
+                result = subprocess.run([sys.executable, str(hmap), *command], cwd=project.ROOT,
+                                        capture_output=True, text=True, timeout=600)
+                text = result.stdout + result.stderr + f"\n(exit code {result.returncode})\n"
+            except Exception as error:  # keep collecting the rest
+                text = f"failed: {error}\n"
+            archive.writestr(f"{command[0]}.txt", text)
+        candidates = [
+            project.ROOT / "build" / "hmap" / "play_state.json",
+            project.ENGINE_GAME / "game.toml",
+            project.ENGINE_GAME / "settings.ini",
+            project.REPO_GAME / "game.toml",
+        ]
+        candidates += sorted((project.ROOT / "build" / "hmap").glob("*.csv"))
+        candidates += sorted((project.REPO_GAME / "analysis").glob("*.csv"))
+        # logs written with --log (play.bat --log run-aurora.txt) in the project folder
+        candidates += sorted(project.ROOT.glob("run*.txt")) + sorted(project.ROOT.glob("*.log"))
+        added = set()
+        for path in candidates:
+            if not path.is_file() or path.stat().st_size > 50 << 20:
+                continue
+            name = path.relative_to(project.ROOT).as_posix() if project.ROOT in path.parents else path.name
+            if project.ENGINE_GAME in path.parents:
+                name = "engine-game/" + path.name
+            if name in added:
+                continue
+            added.add(name)
+            archive.write(path, name)
+            print(f"added {name}")
+    print(f"\nwrote {out}  - attach this file in the chat (it holds logs and analysis, no game data or saves)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hmap.py", description="Harvest Moon: Animal Parade recompilation pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -518,6 +561,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_extract)
 
     sub.add_parser("info", help="show DOL sections and REL modules").set_defaults(func=cmd_info)
+    sub.add_parser("report", help="collect logs and analysis into report.zip (no game data)").set_defaults(func=cmd_report)
 
     p = sub.add_parser("analyze", help="function list, SDK addresses, symbols")
     p.add_argument("--dolphin-map", help="symbol map saved by Dolphin (Symbols > Save Symbol Map)")

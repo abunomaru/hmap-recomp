@@ -67,6 +67,10 @@ In game: **Tab** fast-forward, **F10** settings, **F11** fullscreen (aurora rend
 (found automatically; the port's previous save is backed up), and `py hmap.py export-save` copies
 it back. Pride Parade saves use the `CBIEE9` ID: add `--game-id CBIEE9` if needed.
 
+**Reporting a problem:** run with a log (`play.bat --aurora --log run-aurora.txt`), then
+`py hmap.py report`. It writes `report.zip` with the logs, `doctor`/`info`/`fps-scan` output and the
+analysis files - no game data and no saves - ready to attach.
+
 ## Building by hand / Linux
 
 Requirements: Python 3.11+, Git, CMake 3.24+, Ninja, GCC 13+ or Clang 17+ (MinGW-w64 on
