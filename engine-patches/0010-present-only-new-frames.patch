@@ -1,0 +1,117 @@
+diff --git a/engine/include/wp/gx.h b/engine/include/wp/gx.h
+index 33b5910..f78b685 100644
+--- a/engine/include/wp/gx.h
++++ b/engine/include/wp/gx.h
+@@ -12,5 +12,9 @@ void write_pixel_engine_control(uint16_t value);
+ void request_capture();
+ uint64_t frames_drawn();
+ void run_frame_task(std::function<void()> task);
++// Present policy (hmap-recomp engine patch 0010): true when the game copied a new image to
++// the external framebuffer since the last present, or the screen has not been refreshed for
++// a few retraces (menus, overlays). Call on the GPU thread, in order with the drawing.
++bool should_present();
+ 
+ }
+diff --git a/engine/src/gpu/gx.cpp b/engine/src/gpu/gx.cpp
+index 9c2793a..ce42753 100644
+--- a/engine/src/gpu/gx.cpp
++++ b/engine/src/gpu/gx.cpp
+@@ -27,6 +27,7 @@
+ #include "wp/gx_render.h"
+ #include "wp/gx_state.h"
+ #include "wp/log.h"
++#include "wp/options_window.h"
+ #include "wp/memory.h"
+ #include "wp/profile.h"
+ #include "wp/settings.h"
+@@ -724,6 +725,8 @@ void emit_triangle(std::vector<ScreenVertex>& out, const Prepared& a, const Prep
+ uint32_t g_indirect_draws = 0;
+ uint32_t g_coordinate_draws = 0;
+ std::atomic<uint32_t> g_skipped_presents{0};
++std::atomic<bool> g_new_xfb{true};
++std::atomic<uint32_t> g_repeat_presents{0};
+ // Wall-clock time the GPU thread spends working on items (including time blocked inside the
+ // graphics driver), the part of it spent presenting, and the time the CPU thread is blocked
+ // because the GPU queue is full (hmap-recomp engine patch 0009).
+@@ -1120,8 +1123,9 @@ void execute_copy(uint32_t value) {
+                 static const ThreadClock gpu_clock = current_thread_clock();
+                 double gpu = thread_seconds(gpu_clock);
+                 log::write("copies", "%u EFB copies written back to RAM, %.1f ms waiting for the GPU", write_backs, write_back_seconds * 1000.0);
+-                log::write("gpu", "GPU thread working %.0f%% of real time (presenting %.0f%%), CPU thread blocked on a full GPU queue %.0f%%",
+-                           g_gpu_work_ns.exchange(0) / 1e7 / seconds, g_gpu_present_ns.exchange(0) / 1e7 / seconds, g_cpu_blocked_ns.exchange(0) / 1e7 / seconds);
++                log::write("gpu", "GPU thread working %.0f%% of real time (presenting %.0f%%), CPU thread blocked on a full GPU queue %.0f%%, %u repeat presents avoided",
++                           g_gpu_work_ns.exchange(0) / 1e7 / seconds, g_gpu_present_ns.exchange(0) / 1e7 / seconds, g_cpu_blocked_ns.exchange(0) / 1e7 / seconds,
++                           g_repeat_presents.exchange(0));
+                 log::write("memory", "%zu MB private memory, %zu KB of graphics commands queued", private_memory_mb(), g_queued_bytes.load() >> 10);
+                 double idle = idle_share();
+                 if (idle >= 0.0) {
+@@ -1139,6 +1143,7 @@ void execute_copy(uint32_t value) {
+             }
+         }
+         render::copy_to_framebuffer(x, y, width, height, (g_bp[0x43] & 7) == kPixelFormatZ24, copy_filter(value));
++        g_new_xfb = true;
+     } else {
+         uint32_t source = g_bp[0x49];
+         uint32_t size = g_bp[0x4A];
+@@ -1521,6 +1526,20 @@ void gpu_thread() {
+     }
+ }
+ 
++bool should_present_now() {
++    // A 30 fps game gets 60 retraces a second; presenting the same image twice costs the
++    // graphics card a full-screen pass for nothing. Still present every 4th retrace so
++    // the options menu, hints and window resizes keep updating.
++    static uint32_t since_last = 0;
++    bool fresh = g_new_xfb.exchange(false);
++    if (fresh || ++since_last >= 4 || options::menu_open()) {
++        since_last = 0;
++        return true;
++    }
++    g_repeat_presents++;
++    return false;
++}
++
+ void enqueue(GpuItem item) {
+     std::unique_lock<std::mutex> hold(g_gpu.lock);
+     if (!g_gpu.started) {
+@@ -1567,6 +1586,10 @@ void process() {
+     enqueue(std::move(item));
+ }
+ 
++bool should_present() {
++    return should_present_now();
++}
++
+ void run_frame_task(std::function<void()> task) {
+     process();
+     if (!g_threaded) {
+diff --git a/engine/src/platform/video.cpp b/engine/src/platform/video.cpp
+index 67d04e2..7a8f366 100644
+--- a/engine/src/platform/video.cpp
++++ b/engine/src/platform/video.cpp
+@@ -483,7 +483,9 @@ void save_screenshot() {
+ 
+ void present_on_gpu(HWND window, double aspect) {
+     if (window) {
+-        gx::render::present_frame(window, aspect);
++        if (gx::should_present()) {  // skip repeats of an unchanged image (patch 0010)
++            gx::render::present_frame(window, aspect);
++        }
+     }
+     if (g_screenshot_requested.exchange(false)) {
+         save_screenshot();
+diff --git a/engine/src/platform/video_sdl.cpp b/engine/src/platform/video_sdl.cpp
+index 31114d2..39463e7 100644
+--- a/engine/src/platform/video_sdl.cpp
++++ b/engine/src/platform/video_sdl.cpp
+@@ -436,7 +436,9 @@ std::string g_next_frame_path;
+ 
+ void present_on_gpu(SDL_Window* window, double aspect) {
+     if (window) {
+-        gx::render::present_frame(window, aspect);
++        if (gx::should_present()) {  // skip repeats of an unchanged image (patch 0010)
++            gx::render::present_frame(window, aspect);
++        }
+     }
+     if (g_screenshot_requested.exchange(false)) {
+         save_screenshot();
