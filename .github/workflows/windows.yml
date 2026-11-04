@@ -45,6 +45,20 @@ jobs:
       - name: Build (aurora)
         if: matrix.variant == 'aurora'
         run: python hmap.py build --aurora --console
+      - name: Start the aurora build for 20 seconds (software D3D12 / WARP)
+        if: matrix.variant == 'aurora'
+        shell: pwsh
+        run: |
+          cd extern/wiiparty-recomp
+          Get-ChildItem build/out-hmap-aurora/*.dll | Select-Object Name
+          $env:WP_ALLOW_CPU_GPU = "1"
+          $env:WP_LOG_FILE = "$PWD/aurora-run.log"
+          $p = Start-Process -FilePath build/out-hmap-aurora/hmap.exe -ArgumentList "games/hmap/extracted" -PassThru -NoNewWindow
+          $exited = $p.WaitForExit(20000)
+          if (Test-Path aurora-run.log) { Get-Content aurora-run.log | Select-String "aurora|video|crash" | Select-Object -First 30 }
+          if ($exited) { Write-Error "hmap.exe exited early with code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+          if (-not (Select-String -Path aurora-run.log -Pattern "on aurora" -Quiet)) { Write-Error "aurora did not start"; exit 1 }
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4

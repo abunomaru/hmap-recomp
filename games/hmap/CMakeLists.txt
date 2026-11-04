@@ -37,6 +37,11 @@ target_compile_options(hmap PRIVATE -Wall -Wextra)
 if(WIN32 AND NOT WP_CONSOLE)
     set_target_properties(hmap PROPERTIES WIN32_EXECUTABLE ON)
 endif()
-if(TARGET SDL3::SDL3)
+if(WP_AURORA AND WIN32)
+    # aurora's prebuilt Dawn (webgpu_dawn.dll, + dxcompiler/dxil it loads at run time) and SDL3
+    # must sit next to the executable.
+    include("${WP_AURORA_DIR}/cmake/AuroraCopyRuntimeDLLs.cmake")
+    aurora_copy_runtime_dlls(hmap)
+elseif(TARGET SDL3::SDL3)
     add_custom_command(TARGET hmap POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:hmap>)
 endif()
