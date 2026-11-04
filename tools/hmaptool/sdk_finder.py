@@ -286,6 +286,23 @@ def call_counts(code: Code, targets: set[int]) -> dict[int, int]:
     return counts
 
 
+def find_os_select_thread(code: Code, save: int | None, load: int | None) -> Result:
+    """The scheduler (SelectThread in OSThread.c, named OSSelectThread by the engine): the
+    function that calls both OSSaveContext (current thread) and OSLoadContext (next thread).
+    The engine calls it by name after delivering every interrupt."""
+    if save is None or load is None:
+        return Result("OSSelectThread")
+    calls: dict[int, set[int]] = {}
+    for address, word in code.instructions():
+        if ppc.is_bl(word):
+            target = ppc.branch_target(word, address)
+            if target in (save, load):
+                calls.setdefault(code.function_start(address), set()).add(target)
+    out = [Match("OSSelectThread", start, f"calls OSSaveContext {save:#010x} and OSLoadContext {load:#010x}")
+           for start, targets in calls.items() if targets == {save, load}]
+    return Result("OSSelectThread", _unique(out))
+
+
 FINDERS = {
     "OSSaveContext": find_os_save_context,
     "OSLoadContext": find_os_load_context,
@@ -304,6 +321,18 @@ REQUIRED = tuple(FINDERS)
 OPTIONAL_PAIR = ("setjmp", "longjmp")
 
 
-def find_all(dol: Dol, function_starts: list[int] | None = None, names=REQUIRED) -> dict[str, Result]:
+def find_all(dol: Dol, function_starts: list[int] | None = None, names=REQUIRED,
+             known: dict[str, int] | None = None) -> dict[str, Result]:
+    """Run the finders; OSSelectThread is found from the OSSaveContext/OSLoadContext
+    results (or from `known` addresses taken from a map)."""
     code = Code(dol, function_starts)
-    return {name: FINDERS[name](code) for name in names}
+    results = {name: FINDERS[name](code) for name in names}
+    if "OSSelectThread" in DEPENDENT and (names is REQUIRED or "OSSelectThread" in names):
+        known = known or {}
+        save = known.get("OSSaveContext") or (results["OSSaveContext"].address if "OSSaveContext" in results else None)
+        load = known.get("OSLoadContext") or (results["OSLoadContext"].address if "OSLoadContext" in results else None)
+        results["OSSelectThread"] = find_os_select_thread(code, save, load)
+    return results
+
+
+DEPENDENT = ("OSSelectThread",)

@@ -58,7 +58,7 @@ class SdkFinderTests(unittest.TestCase):
         expected = {
             "OSSaveContext": "OSSaveContext", "OSLoadContext": "OSLoadContext", "setjmp": "setjmp",
             "longjmp": "longjmp", "OSSwitchFiber": "OSSwitchFiber", "OSRealModeCall": "RealMode",
-            "OSPanic": "OSPanic",
+            "OSPanic": "OSPanic", "OSSelectThread": "OSSelectThread",
         }
         for name, label in expected.items():
             with self.subTest(name=name):
@@ -338,7 +338,7 @@ class RealWorldVariantTests(unittest.TestCase):
         dol, labels = self._dol([("entry", [ppc.BLR]), ("save", synthetic.save_context()), ("load", synthetic.load_context()),
                                  ("fiber", synthetic.switch_fiber()), ("real", synthetic.real_mode())])
         manual = Path(tempfile.mkdtemp()) / "manual.csv"
-        manual.write_text("address,name\n0x%08x,OSPanic\n" % labels["entry"])
+        manual.write_text("address,name\n0x%08x,OSPanic\n0x%08x,OSSelectThread\n" % (labels["entry"], labels["entry"] + 4))
         hle = ["OSRealModeCall", "OSPanic", "OSLoadContext", "OSSwitchFiber", "longjmp"]
         result = analyze.analyse(dol, [], None, manual, hle)
         self.assertEqual(result.missing, [])

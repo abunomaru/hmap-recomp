@@ -20,7 +20,10 @@ from pathlib import Path
 from . import ppc, project, sdk_finder, symbols, toolchain
 from .dol import Dol
 
-REQUIRED_NAMES = ("OSSaveContext", "setjmp")
+# Names the engine needs besides hle_functions.csv: OSSaveContext and setjmp are special-cased
+# by the translator; OSSelectThread is called by name after every interrupt
+# (wp::symbol_address in engine/src/core/interrupts.cpp).
+REQUIRED_NAMES = ("OSSaveContext", "setjmp", "OSSelectThread")
 
 
 @dataclass
@@ -89,7 +92,8 @@ def analyse(dol: Dol, dtk_symbols: list[symbols.Symbol], dolphin_map: Path | Non
         table.merge(mapped, "dolphin")
         report.append(f"Dolphin map {dolphin_map.name}: {len(mapped)} entries, {len(named)} named")
 
-    found = sdk_finder.find_all(dol, sorted(table.functions))
+    known = {n: a for n in ("OSSaveContext", "OSLoadContext") if (a := table.address_of(n)) is not None}
+    found = sdk_finder.find_all(dol, sorted(table.functions), known=known)
     for name, result in found.items():
         existing = table.address_of(name)
         if result.address is not None:

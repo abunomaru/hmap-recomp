@@ -120,6 +120,13 @@ def build():
     b.add("OSSwitchFiber", switch_fiber())
     b.add("RealMode", real_mode())
     b.add("OSPanic", panic(panic_string) + [])
+    # the scheduler: saves the current context, then loads the next one
+    sel = TEXT + 4 * len(b.code)
+    b.add("OSSelectThread", [p.MFLR_R0, p.enc_stwu_r1(0x20),
+                             p.enc_bl(sel + 8, b.addr("OSSaveContext")),
+                             (11 << 26) | (0 << 23) | (3 << 16) | 0,  # cmpwi r3, 0
+                             p.enc_bl(sel + 16, b.addr("OSLoadContext")),
+                             p.BLR])
     b.add("VIWaitForRetrace", vi_wait())
     b.add("VIGetRetraceCount", vi_get_count())
     # game main loop: two retrace waits, then a counter compare against 2
