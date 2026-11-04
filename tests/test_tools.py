@@ -488,3 +488,24 @@ class AssetsTests(unittest.TestCase):
         self.assertEqual(self.assets.install_textures(), 2)
         names = sorted(p.name for p in (self.tmp / "engine_game" / "textures" / "load").iterdir())
         self.assertEqual(names, ["tex1_32x32_def_4.png", "tex1_64x64_abc_5.png"])
+
+
+class SaveTests(unittest.TestCase):
+    def test_title_ids(self):
+        from hmaptool import saves
+        self.assertEqual(saves.title_hex("RBIEE9"), "52424945")
+        self.assertEqual(saves.title_hex("CBIEE9"), "43424945")
+
+    def test_import_keeps_backup(self):
+        from hmaptool import saves
+        tmp = Path(tempfile.mkdtemp())
+        dolphin = saves.save_dir(tmp / "dolphin", "RBIEE9")
+        (dolphin / "save").mkdir(parents=True)
+        (dolphin / "save" / "s0000.sv").write_bytes(b"farm from dolphin")
+        self.assertEqual(saves.find_dolphin_save("RBIEE9", tmp / "dolphin"), dolphin)
+        port = saves.save_dir(tmp / "port", "RBIEE9")
+        (port / "save").mkdir(parents=True)
+        (port / "save" / "s0000.sv").write_bytes(b"old port save")
+        backup = saves.copy_save(dolphin, port)
+        self.assertEqual((port / "save" / "s0000.sv").read_bytes(), b"farm from dolphin")
+        self.assertEqual((backup / "save" / "s0000.sv").read_bytes(), b"old port save")

@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import analyze, assets, compress, disc, dsp_finder, fps_scan, patches, project, symbols, toolchain
+from . import analyze, assets, compress, saves, disc, dsp_finder, fps_scan, patches, project, symbols, toolchain
 from .dol import Dol
 
 
@@ -466,6 +466,37 @@ def cmd_play(args) -> int:
     return cmd_run(argparse.Namespace(dump_dsp=None, log=args.log, env=None, scale=None, args=[], aurora=args.aurora))
 
 
+def cmd_import_save(args) -> int:
+    game_id = args.game_id or _game_id()
+    source = Path(args.source).expanduser() / "title" / "00010000" / saves.title_hex(game_id) / "data" if args.source else None
+    if source is None or not source.exists():
+        found = saves.find_dolphin_save(game_id, Path(args.source).expanduser() if args.source else None)
+        if found is None:
+            raise SystemExit(f"no {game_id} save found in Dolphin's Wii folder; pass --source <Dolphin\\Wii folder>")
+        source = found
+    target = saves.save_dir(saves.engine_nand(), game_id)
+    backup = saves.copy_save(source, target)
+    print(f"imported {source} -> {target}")
+    if backup:
+        print(f"the previous save was kept in {backup}")
+    return 0
+
+
+def cmd_export_save(args) -> int:
+    game_id = args.game_id or _game_id()
+    source = saves.save_dir(saves.engine_nand(), game_id)
+    if not source.exists():
+        raise SystemExit(f"no save yet in {source}")
+    target_root = Path(args.target).expanduser() if args.target else next(iter(saves.dolphin_nand_candidates()))
+    target = saves.save_dir(target_root, game_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    backup = saves.copy_save(source, target)
+    print(f"exported {source} -> {target}")
+    if backup:
+        print(f"Dolphin's previous save was kept in {backup}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hmap.py", description="Harvest Moon: Animal Parade recompilation pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -535,6 +566,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-run", action="store_true", help="build only")
     p.add_argument("--cmake-arg", action="append", metavar="ARG", help="extra CMake configure argument (repeatable)")
     p.set_defaults(func=cmd_play)
+
+    p = sub.add_parser("import-save", help="copy your Dolphin save of this game into the port (old save backed up)")
+    p.add_argument("--source", help="Dolphin's Wii folder (default: found automatically)")
+    p.add_argument("--game-id", help="e.g. RBIEE9 or CBIEE9 (default: the extracted disc)")
+    p.set_defaults(func=cmd_import_save)
+
+    p = sub.add_parser("export-save", help="copy the port's save into Dolphin's Wii folder (old save backed up)")
+    p.add_argument("--target", help="Dolphin's Wii folder (default: found automatically)")
+    p.add_argument("--game-id", help="e.g. RBIEE9 or CBIEE9 (default: the extracted disc)")
+    p.set_defaults(func=cmd_export_save)
 
     p = sub.add_parser("all", help="everything from a disc image to an executable")
     p.add_argument("disc")

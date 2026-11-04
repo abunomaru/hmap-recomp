@@ -63,6 +63,10 @@ engine did not have and which Animal Parade needs for movement.
 
 In game: **Tab** fast-forward, **F10** settings, **F11** fullscreen (aurora renderer).
 
+**Dolphin saves:** `py hmap.py import-save` copies your Dolphin save of the game into the port
+(found automatically; the port's previous save is backed up), and `py hmap.py export-save` copies
+it back. Pride Parade saves use the `CBIEE9` ID: add `--game-id CBIEE9` if needed.
+
 ## Building by hand / Linux
 
 Requirements: Python 3.11+, Git, CMake 3.24+, Ninja, GCC 13+ or Clang 17+ (MinGW-w64 on
