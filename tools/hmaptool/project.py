@@ -209,3 +209,57 @@ def cmake_dir() -> Path:
 def executable() -> Path:
     suffix = ".exe" if os.name == "nt" else ""
     return cmake_dir() / f"{GAME_KEY}{suffix}"
+
+
+# ------------------------------------------------------------------ game settings defaults
+
+# Defaults for this game that differ from the engine's (applied once per version,
+# so later changes by the player in F10 / settings.ini are kept).
+GAME_DEFAULTS_VERSION = 1
+GAME_DEFAULTS = {"video.scale": "2"}  # 1280x960: sharp on a 1080p screen
+
+
+def settings_file() -> Path:
+    return ENGINE_GAME / "settings.ini"
+
+
+def set_ini_values(path: Path, values: dict[str, str]) -> None:
+    """Set section.key=value entries in the engine's settings.ini, keeping everything else."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    pending = dict(values)
+    section = ""
+    out: list[str] = []
+
+    def flush_section(name: str) -> None:
+        for full in [k for k in pending if k.split(".", 1)[0] == name]:
+            out.append(f"{full.split('.', 1)[1]}={pending.pop(full)}")
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            flush_section(section)
+            section = stripped[1:-1].strip()
+            out.append(line)
+            continue
+        if "=" in stripped and not stripped.startswith((";", "#")):
+            key = f"{section}.{stripped.split('=', 1)[0].strip()}"
+            if key in pending:
+                out.append(f"{key.split('.', 1)[1]}={pending.pop(key)}")
+                continue
+        out.append(line)
+    flush_section(section)
+    for name in sorted({k.split(".", 1)[0] for k in pending}):
+        out += ["", f"[{name}]"]
+        flush_section(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out).strip("\n") + "\n", encoding="utf-8")
+
+
+def apply_game_defaults() -> bool:
+    marker = WORK / f"settings-defaults-v{GAME_DEFAULTS_VERSION}"
+    if marker.exists():
+        return False
+    set_ini_values(settings_file(), GAME_DEFAULTS)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("applied\n")
+    return True

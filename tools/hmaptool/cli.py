@@ -352,6 +352,11 @@ def cmd_run(args) -> int:
     exe = project.executable()
     if not exe.exists():
         raise SystemExit("not built yet - run `hmap.py build`")
+    if project.apply_game_defaults():
+        print("game defaults applied to settings.ini: " + ", ".join(f"{k}={v}" for k, v in project.GAME_DEFAULTS.items()))
+    if args.scale:
+        project.set_ini_values(project.settings_file(), {"video.scale": str(args.scale)})
+        print(f"internal resolution set to {args.scale}x")
     env = dict(os.environ)
     if args.log:
         log_file = Path(args.log).resolve()
@@ -429,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("run", help="run the built game")
     p.add_argument("--dump-dsp", metavar="DIR", help="write uploaded DSP microcode images to DIR")
     p.add_argument("--log", metavar="FILE", help="write the engine log (performance, threads, errors) to FILE")
+    p.add_argument("--scale", type=int, choices=range(1, 7), metavar="1-6",
+                   help="internal resolution multiplier, saved to settings.ini (2 = 1280x960, 3 = 1920x1440)")
     p.add_argument("args", nargs=argparse.REMAINDER)
     p.set_defaults(func=cmd_run)
 

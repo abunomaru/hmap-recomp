@@ -360,3 +360,25 @@ class RealWorldVariantTests(unittest.TestCase):
         result = sdk_finder.find_os_panic(sdk_finder.Code(dol, sorted(labels.values())))
         self.assertEqual(result.address, labels["panic"])
         self.assertEqual([m.address for m in result.alternatives], [labels["lookalike"]])
+
+
+class SettingsIniTests(unittest.TestCase):
+    def test_set_values_keeps_other_entries(self):
+        from hmaptool import project
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.ini"
+            path.write_text("[video]\nscale=1\nfullscreen=0\n\n[input]\nnunchuk=1\n")
+            project.set_ini_values(path, {"video.scale": "2", "audio.mute": "0"})
+            text = path.read_text()
+            self.assertIn("scale=2", text)
+            self.assertNotIn("scale=1", text)
+            self.assertIn("fullscreen=0", text)
+            self.assertIn("nunchuk=1", text)
+            self.assertIn("[audio]\nmute=0", text)
+
+    def test_creates_missing_file(self):
+        from hmaptool import project
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sub" / "settings.ini"
+            project.set_ini_values(path, {"video.scale": "2"})
+            self.assertEqual(path.read_text(), "[video]\nscale=2\n")
