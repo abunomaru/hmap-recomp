@@ -1,0 +1,110 @@
+diff --git a/engine/src/core/interrupts.cpp b/engine/src/core/interrupts.cpp
+index a7ca209..8603927 100644
+--- a/engine/src/core/interrupts.cpp
++++ b/engine/src/core/interrupts.cpp
+@@ -46,6 +46,44 @@ using Clock = std::chrono::steady_clock;
+ constexpr uint32_t kCurrentThread = 0x800000E4;
+ std::atomic<int64_t> g_idle_nanoseconds{0};
+ 
++// Wait diagnostics (hmap-recomp engine patch 0007): with WP_LOG_FILE set, log once per
++// second how many interrupts of each kind were delivered and how long the guest had been
++// idle (no runnable thread) before the interrupt that woke it - i.e. what the game waits on.
++enum Cause { kCauseDecrementer, kCauseIpc, kCauseDsp, kCauseFinish, kCauseExi, kCauseSerial, kCauseVideo, kCauseCount };
++constexpr const char* kCauseNames[kCauseCount] = {"timer", "ipc", "dsp", "gpu-finish", "exi", "serial", "retrace"};
++int g_last_cause = -1;
++uint32_t g_cause_counts[kCauseCount] = {};
++double g_cause_wait_ms[kCauseCount] = {};
++uint32_t g_cause_wakes[kCauseCount] = {};
++
++void note_cause(int cause) {
++    g_last_cause = cause;
++    g_cause_counts[cause]++;
++}
++
++void log_waits(Clock::time_point now) {
++    static Clock::time_point last = now;
++    double seconds = std::chrono::duration<double>(now - last).count();
++    if (seconds < 1.0) {
++        return;
++    }
++    last = now;
++    if (!log::enabled()) {
++        return;
++    }
++    char text[480];
++    int used = std::snprintf(text, sizeof text, "per s:");
++    for (int i = 0; i < kCauseCount && used < static_cast<int>(sizeof text); i++) {
++        used += std::snprintf(text + used, sizeof text - used, " %s %u (woke %u, %.0f ms idle before)", kCauseNames[i],
++                              static_cast<unsigned>(g_cause_counts[i] / seconds), static_cast<unsigned>(g_cause_wakes[i] / seconds),
++                              g_cause_wait_ms[i] / seconds);
++        g_cause_counts[i] = 0;
++        g_cause_wakes[i] = 0;
++        g_cause_wait_ms[i] = 0.0;
++    }
++    log::write("waits", "%s", text);
++}
++
+ std::chrono::microseconds retrace_period() {
+     return (rd16(kDisplayConfig) & kFormatMask) == kFormatPal ? kPalPeriod : kNtscPeriod;
+ }
+@@ -171,9 +209,11 @@ void poll_interrupts(Cpu& c) {
+         return;
+     }
+     if (decrementer_due()) {
++        note_cause(kCauseDecrementer);
+         deliver_decrementer(c);
+     }
+     if (ipc::interrupt_pending()) {
++        note_cause(kCauseIpc);
+         deliver_external_interrupt(c, ipc::kInterrupt);
+     }
+     for (int delivered = 0; delivered < 3; delivered++) {
+@@ -181,9 +221,11 @@ void poll_interrupts(Cpu& c) {
+         if (index == 0) {
+             break;
+         }
++        note_cause(kCauseDsp);
+         deliver_external_interrupt(c, index);
+     }
+     if (gx::take_finish_interrupt()) {
++        note_cause(kCauseFinish);
+         deliver_external_interrupt(c, kFinishInterrupt);
+     }
+     for (int delivered = 0; delivered < 3; delivered++) {
+@@ -191,9 +233,11 @@ void poll_interrupts(Cpu& c) {
+         if (index == 0) {
+             break;
+         }
++        note_cause(kCauseExi);
+         deliver_external_interrupt(c, index);
+     }
+     if (si::interrupt_pending()) {
++        note_cause(kCauseSerial);
+         deliver_external_interrupt(c, kSerialInterrupt);
+     }
+     gx::process();
+@@ -204,8 +248,16 @@ void poll_interrupts(Cpu& c) {
+     if (idle && previous_idle) {
+         g_idle_nanoseconds += std::chrono::duration_cast<std::chrono::nanoseconds>(now - previous_poll).count();
+     }
++    static Clock::time_point idle_since = now;
++    if (idle && !previous_idle) {
++        idle_since = now;
++    } else if (!idle && previous_idle && g_last_cause >= 0) {
++        g_cause_wakes[g_last_cause]++;
++        g_cause_wait_ms[g_last_cause] += std::chrono::duration<double, std::milli>(now - idle_since).count();
++    }
+     previous_poll = now;
+     previous_idle = idle;
++    log_waits(now);
+     if (now < g_next_retrace) {
+         return;
+     }
+@@ -215,6 +267,7 @@ void poll_interrupts(Cpu& c) {
+         g_next_retrace = now + period;
+     }
+     si::poll();
++    note_cause(kCauseVideo);
+     deliver_video_interrupt(c);
+ }
+ 
