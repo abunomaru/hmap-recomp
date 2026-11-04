@@ -382,3 +382,109 @@ class SettingsIniTests(unittest.TestCase):
             path = Path(tmp) / "sub" / "settings.ini"
             project.set_ini_values(path, {"video.scale": "2"})
             self.assertEqual(path.read_text(), "[video]\nscale=2\n")
+
+
+class AssetsTests(unittest.TestCase):
+    """assets/ handling: disc discovery and xdelta patching with a cache (fake discs, no game data)."""
+
+    def setUp(self):
+        import shutil as _shutil
+        from hmaptool import assets, project
+        self.assets, self.project = assets, project
+        self.tmp = Path(tempfile.mkdtemp())
+        self._root = project.ROOT
+        project.ROOT = self.tmp
+        self.addCleanup(lambda: setattr(project, "ROOT", self._root))
+        self.addCleanup(lambda: _shutil.rmtree(self.tmp, ignore_errors=True))
+        (self.tmp / "assets" / "patches").mkdir(parents=True)
+
+    def test_requires_exactly_one_disc(self):
+        with self.assertRaises(SystemExit):
+            self.assets.find_disc()
+        (self.tmp / "assets" / "a.iso").write_bytes(b"x")
+        self.assertEqual(self.assets.find_disc().name, "a.iso")
+        (self.tmp / "assets" / "b.rvz").write_bytes(b"x")
+        with self.assertRaises(SystemExit):
+            self.assets.find_disc()
+
+    def test_no_patches_uses_disc_directly(self):
+        disc = self.tmp / "assets" / "game.iso"
+        disc.write_bytes(b"disc")
+        path, _ = self.assets.prepared_image()
+        self.assertEqual(path, disc)
+
+    def test_xdelta_patch_applied_and_cached(self):
+        import shutil as _shutil
+        import subprocess as _subprocess
+        if not _shutil.which("xdelta3"):
+            self.skipTest("xdelta3 not installed")
+        import os
+        os.environ["HMAP_XDELTA3"] = _shutil.which("xdelta3")
+        self.addCleanup(lambda: os.environ.pop("HMAP_XDELTA3", None))
+        from hmaptool import disc as _disc
+        header = bytearray(0x100)
+        header[0:6] = b"RBIEE9"
+        header[0x18:0x1C] = struct.pack(">I", _disc.WII_MAGIC)
+        original = bytes(header) + bytes(range(256)) * 4096
+        modified = bytearray(original)
+        modified[1000:1004] = b"GAY!"
+        modified[0:6] = b"CBIEE9"
+        disc = self.tmp / "assets" / "game.iso"
+        disc.write_bytes(original)
+        target = self.tmp / "target.iso"
+        target.write_bytes(bytes(modified))
+        patch = self.tmp / "assets" / "patches" / "pride.xdelta"
+        _subprocess.run(["xdelta3", "-e", "-f", "-s", str(disc), str(target), str(patch)], check=True)
+        path, first = self.assets.prepared_image()
+        self.assertEqual(path.read_bytes(), bytes(modified))
+        mtime = path.stat().st_mtime_ns
+        path2, second = self.assets.prepared_image()
+        self.assertEqual((path2, second), (path, first))
+        self.assertEqual(path2.stat().st_mtime_ns, mtime, "second call must use the cache")
+        # a different patch invalidates the cache
+        modified[2000] ^= 0xFF
+        target.write_bytes(bytes(modified))
+        import time as _time
+        _time.sleep(1.1)
+        _subprocess.run(["xdelta3", "-e", "-f", "-s", str(disc), str(target), str(patch)], check=True)
+        path3, third = self.assets.prepared_image()
+        self.assertNotEqual(third, first)
+        self.assertEqual(path3.read_bytes(), bytes(modified))
+
+    def test_wrong_disc_reports_clearly(self):
+        import shutil as _shutil
+        import subprocess as _subprocess
+        if not _shutil.which("xdelta3"):
+            self.skipTest("xdelta3 not installed")
+        import os
+        os.environ["HMAP_XDELTA3"] = _shutil.which("xdelta3")
+        self.addCleanup(lambda: os.environ.pop("HMAP_XDELTA3", None))
+        import random as _random
+        rng = _random.Random(5)
+        base_bytes = bytes(rng.getrandbits(8) for _ in range(300000))
+        base = self.tmp / "base.iso"
+        base.write_bytes(base_bytes)
+        changed = bytearray(base_bytes)
+        changed[5000:5010] = b"0123456789"  # like a real mod: mostly copied from the source disc
+        target = self.tmp / "t.iso"
+        target.write_bytes(bytes(changed))
+        patch = self.tmp / "assets" / "patches" / "p.xdelta"
+        _subprocess.run(["xdelta3", "-e", "-f", "-s", str(base), str(target), str(patch)], check=True)
+        (self.tmp / "assets" / "other.iso").write_bytes(bytes(_random.Random(9).getrandbits(8) for _ in range(300000)))
+        with self.assertRaises(SystemExit) as raised:
+            self.assets.prepared_image()
+        self.assertIn("does not apply", str(raised.exception))
+
+    def test_texture_packs(self):
+        import zipfile as _zipfile
+        tex = self.tmp / "assets" / "textures"
+        (tex / "pack" / "CBIEE9").mkdir(parents=True)
+        (tex / "pack" / "CBIEE9" / "tex1_64x64_abc_5.png").write_bytes(b"png")
+        with _zipfile.ZipFile(tex / "more.zip", "w") as archive:
+            archive.writestr("CBIEE9/tex1_32x32_def_4.png", b"png")
+            archive.writestr("readme.txt", b"no")
+        self.project.ENGINE_GAME = self.tmp / "engine_game"
+        self.addCleanup(lambda: setattr(self.project, "ENGINE_GAME", self._root / "extern" / "wiiparty-recomp" / "games" / "hmap"))
+        self.assertEqual(self.assets.install_textures(), 2)
+        names = sorted(p.name for p in (self.tmp / "engine_game" / "textures" / "load").iterdir())
+        self.assertEqual(names, ["tex1_32x32_def_4.png", "tex1_64x64_abc_5.png"])

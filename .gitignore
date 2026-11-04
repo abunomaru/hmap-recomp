@@ -43,3 +43,7 @@ __pycache__/
 games/*/analysis/dol_functions.csv
 games/*/analysis/symbols.csv
 games/*/analysis/sdk_report.txt
+
+# ---- The player's own files ------------------------------------------------
+assets/*
+!assets/README.md

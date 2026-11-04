@@ -98,6 +98,16 @@ def prepared_image() -> tuple[Path, str]:
         if current != source:
             current.unlink()
         current = target
+    # Guard against a patch that "applied" but produced something that is not the game.
+    from . import disc as disc_module
+    try:
+        info = disc_module.identify(current)
+    except (ValueError, OSError) as error:
+        current.unlink(missing_ok=True)
+        raise SystemExit(f"the patched image is not a Wii disc ({error}); check that the patches match {disc.name}")
+    if info.release is None:
+        current.unlink(missing_ok=True)
+        raise SystemExit(f"the patched image has disc ID {info.game_id}, not a known Animal Parade release")
     current.replace(patched)
     if source != disc:
         source.unlink(missing_ok=True)

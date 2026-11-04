@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ glslang-tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ glslang-tools xdelta3
       - name: GX to aurora bridge tests
         run: sh tests/bridge/run.sh
       - name: Python tool tests

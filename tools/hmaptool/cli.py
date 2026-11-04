@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import analyze, compress, disc, dsp_finder, fps_scan, patches, project, symbols, toolchain
+from . import analyze, assets, compress, disc, dsp_finder, fps_scan, patches, project, symbols, toolchain
 from .dol import Dol
 
 
@@ -357,7 +357,7 @@ def cmd_build(args) -> int:
 
 
 def cmd_run(args) -> int:
-    exe = project.executable()
+    exe = project.executable(getattr(args, "aurora", None))
     if not exe.exists():
         raise SystemExit("not built yet - run `hmap.py build`")
     if project.apply_game_defaults():
@@ -394,6 +394,75 @@ def cmd_all(args) -> int:
     cmd_patch(argparse.Namespace(list=False, reset=False))
     cmd_recompile(argparse.Namespace())
     return cmd_build(argparse.Namespace(headless=args.headless, debug=False, console=False, jobs=None, code_opt="-O1", aurora=False, cmake_arg=None))
+
+
+def _state_path() -> Path:
+    return project.WORK / "play_state.json"
+
+
+def _load_state() -> dict:
+    try:
+        return json.loads(_state_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(state: dict) -> None:
+    _state_path().parent.mkdir(parents=True, exist_ok=True)
+    _state_path().write_text(json.dumps(state, indent=2) + "\n")
+
+
+def _patch_fingerprint() -> str:
+    import hashlib
+    digest = hashlib.sha256()
+    for path in sorted(project.PATCHES.rglob("*")):
+        if path.is_file():
+            digest.update(path.name.encode() + path.read_bytes())
+    return digest.hexdigest()
+
+
+def cmd_play(args) -> int:
+    """Everything from the files in assets/ to a running game; each step only when needed."""
+    cmd_setup(argparse.Namespace(force=False))
+    state = _load_state()
+    image, fingerprint = assets.prepared_image()
+
+    if state.get("disc") != fingerprint or not project.main_dol().exists():
+        print(f"== installing {image.name}")
+        cmd_extract(argparse.Namespace(disc=str(image), force=True, any_game=False))
+        state = {"disc": fingerprint}
+        _save_state(state)
+
+    copied = assets.install_textures()
+    if copied:
+        print(f"== {copied} texture pack files installed")
+
+    if state.get("analyzed") != fingerprint:
+        print("== analysing the game code")
+        status = cmd_analyze(argparse.Namespace(dolphin_map=None, skip_dtk=not args.dtk))
+        if status:
+            return status
+        state["analyzed"] = fingerprint
+        _save_state(state)
+
+    patch_fp = _patch_fingerprint()
+    code_fp = f"{fingerprint}:{patch_fp}"
+    if state.get("recompiled") != code_fp or not (project.generated() / "dol").exists():
+        print("== applying patches and translating the game code (a few minutes)")
+        cmd_patch(argparse.Namespace(list=False, reset=False))
+        cmd_recompile(argparse.Namespace())
+        state["recompiled"] = code_fp
+        _save_state(state)
+
+    print("== building (only what changed)")
+    status = cmd_build(argparse.Namespace(headless=False, debug=False, console=args.console, jobs=None,
+                                          code_opt="-O1", aurora=args.aurora, cmake_arg=args.cmake_arg))
+    if status:
+        return status
+    if args.no_run:
+        return 0
+    print("== starting the game")
+    return cmd_run(argparse.Namespace(dump_dsp=None, log=args.log, env=None, scale=None, args=[], aurora=args.aurora))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -456,6 +525,15 @@ def main(argv: list[str] | None = None) -> int:
                    help="internal resolution multiplier, saved to settings.ini (2 = 1280x960, 3 = 1920x1440)")
     p.add_argument("args", nargs=argparse.REMAINDER)
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("play", help="build from the files in assets/ (only what changed) and start the game")
+    p.add_argument("--aurora", action="store_true", help="use the aurora renderer (D3D12/Vulkan, experimental)")
+    p.add_argument("--dtk", action="store_true", help="use decomp-toolkit for analysis (slower; default is the built-in scan)")
+    p.add_argument("--console", action="store_true", help="Windows: keep a console window with the game's messages")
+    p.add_argument("--log", metavar="FILE", help="write the engine log to FILE")
+    p.add_argument("--no-run", action="store_true", help="build only")
+    p.add_argument("--cmake-arg", action="append", metavar="ARG", help="extra CMake configure argument (repeatable)")
+    p.set_defaults(func=cmd_play)
 
     p = sub.add_parser("all", help="everything from a disc image to an executable")
     p.add_argument("disc")
