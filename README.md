@@ -115,7 +115,7 @@ frame lock most likely lives.
 | `patches/` | static patches for the game's `main.dol` |
 | `extern/wiiparty-recomp/` | engine + recompiler (submodule, pinned) |
 | `tests/` | `python -m unittest discover -s tests` (no game data needed) and `tests/engine/run.sh` |
-| `docs/` | [ROADMAP](docs/ROADMAP.md), [PIPELINE](docs/PIPELINE.md), [60FPS](docs/60FPS.md), [LOCAL_SERVER](docs/LOCAL_SERVER.md) |
+| `docs/` | [ROADMAP](docs/ROADMAP.md), [PIPELINE](docs/PIPELINE.md), [60FPS](docs/60FPS.md), [RESEARCH](docs/RESEARCH.md), [LOCAL_SERVER](docs/LOCAL_SERVER.md) |
 
 ## Legal
 

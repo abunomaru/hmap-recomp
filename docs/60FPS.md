@@ -27,6 +27,8 @@ together.
 
 ## Option A: frame interpolation (recommended first)
 
+WiiCompiled's aurora fork already ships this for Mario Kart Wii (`lib/gx/frame_interpolation.cpp`, MIT). See [RESEARCH.md](RESEARCH.md): it needs GPU-side vertex transform first.
+
 Game logic stays at 30 Hz. The renderer draws an extra in-between frame, which is what
 WiiCompiled does for Mario Kart Wii above 60 Hz and what N64 recomps (RT64) do.
 
